@@ -1,0 +1,9 @@
+# Собранное приложение (~97 МБ) — выкладывается в Releases, а не в код
+*.exe
+src/build/.out/
+
+# Системный мусор
+Thumbs.db
+desktop.ini
+.DS_Store
+node_modules/
