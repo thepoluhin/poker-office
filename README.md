@@ -50,7 +50,7 @@
 
 ## Как начать
 
-1. Скачайте `Покер Офис.exe` из [Releases](https://github.com/thepoluhin/poker-office/releases/latest) и запустите на одном компьютере. Установка не нужна.
+1. Скачайте `Poker-Office-1.3.0.exe` из [Releases](https://github.com/thepoluhin/poker-office/releases/latest) и запустите на одном компьютере. Установка не нужна. Если SmartScreen предупредит о неизвестном издателе, нажмите «Подробнее» → «Выполнить в любом случае».
 2. В окне игры появится адрес вида `http://192.168.0.102:3000`. Отправьте его коллегам: они открывают его в браузере на своих компьютерах в той же сети.
 3. Каждый выбирает ник и аватарку и нажимает «Готов». Тот, кто запустил игру, становится админом и начинает партию.
 
@@ -121,7 +121,7 @@ powershell -ExecutionPolicy Bypass -File src/build/build.ps1
 
 ## In English
 
-**Poker Office** is a Texas Hold'em game for 2–6 players over a local network. One Windows PC runs `Покер Офис.exe` (a single file, no install), everyone else joins from a browser via the LAN address shown in its window. No internet, no accounts, play chips only. Features: correct side pots and all-in rules, tournaments with blind clock, live all-in equities, chat and reactions, four table themes, table state survives restarts. The server is plain Node.js with zero dependencies (SSE + JSON commands). The interface is in Russian. MIT licensed.
+**Poker Office** is a Texas Hold'em game for 2–6 players over a local network. One Windows PC runs `Poker-Office-1.3.0.exe` (a single file, no install), everyone else joins from a browser via the LAN address shown in its window. No internet, no accounts, play chips only. Features: correct side pots and all-in rules, tournaments with blind clock, live all-in equities, chat and reactions, four table themes, table state survives restarts. The server is plain Node.js with zero dependencies (SSE + JSON commands). The interface is in Russian. MIT licensed.
 
 ## Лицензия
 
