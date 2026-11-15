@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
-const { Game, SEATS, outlook } = require('./engine');
+const { Game, SEATS, outlook, improveOuts, equities, outsOf } = require('./engine');
 
 const FIRST_PORT = Number(process.env.PORT) || 3000;
 let PORT = FIRST_PORT;
@@ -14,6 +14,15 @@ const FROM_LAUNCHER = !!process.env.POKER_LAUNCHER; // запущен окном
 // В собранном приложении страницы игры лежат внутри exe, при запуске из исходников — в папке public.
 let sea = null;
 try { const s = require('node:sea'); if (s.isSea()) sea = s; } catch (e) { /* обычный запуск */ }
+// Отпечаток страницы игры: если приложение пересобрали, открытые вкладки увидят другой отпечаток при переподключении
+// и сами перезагрузятся — иначе у игрока остаются старые стили и код.
+const BUILD = (() => {
+  const h = require('crypto').createHash('sha1');
+  for (const f of ['index.html', 'app.js', 'style.css']) {
+    try { h.update(sea ? Buffer.from(sea.getAsset(f)) : fs.readFileSync(path.join(__dirname, 'public', f))); } catch (e) { /* нет файла */ }
+  }
+  return h.digest('hex').slice(0, 12);
+})();
 
 // Адреса, по которым игру видно из локальной сети. Виртуальные адаптеры и VPN друзьям не подойдут.
 function lanAddresses() {
@@ -25,7 +34,6 @@ function lanAddresses() {
   const real = all.filter((a) => !virtual.test(a.name));
   return real.length ? real : all;
 }
-const TURN_MS = 30000;
 const PAUSE_REQUEST_MS = 20000;
 const EMOJI_AVATARS = ['🦊', '🐻', '🐼', '🐯', '🦁', '🐸', '🐵', '🐧', '🦉', '🐺'];
 const THEMES = ['classic', 'graphite', 'burgundy', 'night'];
@@ -49,7 +57,7 @@ const FACTORY = {
   cfg: { sb: 100, bb: 200, startStack: 20000 },
   look: { theme: 'classic', cards: 'two' },
   // nextHand: 'dealer' — новую раздачу запускает дилер, 'auto' — сама; mode: 'cash' — обычная игра, 'tour' — турнир
-  rules: { rebuyLimit: -1, turnMs: 0, nextHand: 'dealer', mode: 'cash', tourMin: 5, tourStack: 10000, tourRebuy: 0, tourTurn: 30000 },
+  rules: { rebuyLimit: -1, turnMs: 0, nextHand: 'dealer', mode: 'cash', tourMin: 5, tourStack: 10000, tourRebuy: 0, tourTurn: 30000, tourAutoDeal: false },
 };
 
 // ---------- турнир ----------
@@ -89,9 +97,11 @@ const REBUY_REQUEST_MS = 60000;
 const OFFLINE_TURN_MS = 30000;
 const TURN_OPTIONS = [30000, 60000, 0];
 const rules = Object.assign({}, FACTORY.rules);  // докупок на игрока (-1 — без лимита) и время на ход в мс (0 — без времени)
+let runoutUntil = 0;               // до какого момента на столах открываются карты олл-ина
 let boardLogged = 0;              // сколько карт стола уже записано в ход игры
 let turnTotal = 0;                // сколько времени дано на текущий ход
 const ledger = new Map();         // ключ браузера -> { stack, buyins, bought }: фишки участника, который сейчас не за столом
+const departed = new Map();       // ник (в нижнем регистре) -> { stack, buyins, bought }: фишки вышедших из игры
 const rebuyReqs = new Map();      // id игрока -> { id, mode: 'host' | 'table', votes:Set, timer }
 
 const seatOf = (c) => game.seats.findIndex((s) => s && s.id === c.id);
@@ -142,7 +152,12 @@ function send(c, event, data) {
 function broadcast(event, data) {
   for (const c of clients.values()) send(c, event, data);
 }
-function note(entry) {
+// При олл-ине ход игры не должен обгонять стол: пока на столе по очереди открываются карты,
+// записи об итоге (банк, выбывание, докупка) придерживаются до конца открытия.
+let noteHoldUntil = 0;
+function note(entry, now) {
+  const wait = noteHoldUntil - Date.now();
+  if (!now && wait > 0 && entry.kind !== 'chat') { setTimeout(() => note(entry, true), wait); return; } // чат не ждёт
   entry.ts = Date.now();
   history.push(entry);
   if (history.length > 1200) history.shift(); // около 40 раздач
@@ -156,23 +171,31 @@ function view(c) {
   const seats = game.seats.map((s, i) => {
     if (!s) return null;
     const owner = clientById(s.id);
-    const shown = i === mySeat || (res && res.showdown && s.inHand && !s.folded);
+    const showed = !!res && s.showedHand === game.handNo; // сам открыл карты после раздачи
+    const liveAllIn = game.phase !== 'idle' && game.runoutFrom != null && s.inHand && !s.folded; // олл-ин, улицы открывает дилер: карты уже на столе
+    const shown = i === mySeat || (res && res.showdown && s.inHand && !s.folded) || showed || liveAllIn;
     return {
       id: s.id, name: s.name, avatar: s.avatar, stack: s.stack, bet: s.bet,
       inHand: s.inHand, folded: s.folded, allIn: s.allIn, sittingOut: s.sittingOut,
       connected: !!(owner && owner.res), cups: owner ? owner.cups || 0 : 0, buyins: s.buyins, leaving: !!s.leaving, ready: !!s.ready,
       net: s.stack + (game.phase !== 'idle' && s.inHand ? s.total : 0) - s.bought,
       hasCards: s.inHand && !s.folded && s.cards.length === 2,
-      cards: shown && s.inHand ? s.cards : null,
+      cards: shown && s.inHand ? s.cards : null, showed,
     };
   });
   const me = mySeat >= 0 ? game.seats[mySeat] : null;
-  const hint = me && me.inHand && !me.folded && me.cards.length === 2 && game.phase !== 'idle' ? outlook(me.cards.concat(game.board), 5 - game.board.length) : null;
+  const hint = me && me.inHand && !me.folded && me.cards.length === 2 && game.phase !== 'idle' ? Object.assign(outlook(me.cards.concat(game.board), 5 - game.board.length), { outs: improveOuts(me.cards, game.board) }) : null;
   return {
     you: { id: c.id, seat: mySeat, isHost: c.isHost, name: c.name, avatar: c.avatar }, hint,
     cfg: game.cfg, pendingCfg, look, seats,
     links: lanAddresses().map((a) => `http://${a.address}:${PORT}`),
-    people: [...clients.values()].map((p) => ({ id: p.id, name: p.name, avatar: p.avatar, seated: seatOf(p) >= 0, connected: !!p.res, isHost: p.isHost, cups: p.cups || 0 })),
+    people: [...clients.values()].map((p) => {
+      const seated = seatOf(p) >= 0;
+      // фишки того, кто не за столом (во время турнира — отложенные фишки обычной игры): для списка «Не в сети»
+      const ch = seated ? null : tour.cash ? (tour.cash.people.get(p.token) || {}).chips : ledger.get(p.token);
+      return { id: p.id, name: p.name, avatar: p.avatar, seated, connected: !!p.res, isHost: p.isHost, cups: p.cups || 0,
+        chips: ch ? { stack: ch.stack, net: ch.stack - ch.bought } : null };
+    }),
     board: game.board, pot: game.pot() || (res ? res.total : 0),
     phase: game.phase, handNo: game.handNo, button: game.button,
     toAct: game.toAct, legal: mySeat >= 0 ? game.legal(mySeat) : null,
@@ -181,6 +204,10 @@ function view(c) {
     bbSeat: game.phase !== 'idle' ? game.bbSeat : -1,
     turnLeft: game.toAct >= 0 ? (paused ? turnLeftOnPause : (turnDeadline ? Math.max(0, turnDeadline - Date.now()) : 0)) : 0,
     turnTotal,
+    askedShow: !!res && game.askedHand === game.handNo, // победитель уже попросил показать карты
+    // улица закрыта и ждёт дилера; streetIn — через сколько мс кнопка станет доступна (пауза открытия при олл-ине)
+    waitStreet: !!game.waitStreet, streetIn: game.waitStreet ? Math.max(0, streetReadyAt - Date.now()) : 0, autoDeal: autoDeal(),
+    runoutLive: liveStage(),
     running, paused, pausedBy: paused ? pausedBy : '', rules, tour: tourView(),
     waitDealer, dealerSeat: waitDealer ? nextDealerSeat() : -1,
     rebuyReqs: [...rebuyReqs.values()].map((r) => ({ id: r.id, mode: r.mode, votes: [...r.votes], needed: rebuyApprovers(r).map((p) => p.id) })),
@@ -198,10 +225,10 @@ function push() {
 // ---------- сохранение стола ----------
 // Стол пишется в обычный файл в папке пользователя (%LOCALAPPDATA%\PokerLAN): прав администратора и вопросов
 // от Windows не нужно. Если приложение закрылось, при следующем запуске стеки, докупки и настройки вернутся,
-// а игроки, войдя под своим ником, сядут со своими фишками. Сохранение старше 12 часов не восстанавливается.
+// а игроки, войдя под своим ником, сядут со своими фишками. Сохранение старше недели не восстанавливается: коллеги возвращаются на следующий день со своими фишками.
 const SAVE_DIR = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'PokerLAN');
 const SAVE_FILE = path.join(SAVE_DIR, 'table.json');
-const SAVE_MAX_AGE = 12 * 60 * 60 * 1000;
+const SAVE_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // неделя
 let saveTimer = null;
 // Участник узнаётся по ключу своего браузера, а не по нику: после перезапуска приложения он сам
 // возвращается на своё место, а чужой человек с тем же ником занять его не может.
@@ -308,15 +335,67 @@ function logAction(i, action, street, before, amount, timeout) {
   });
 }
 function logStreets() {
+  while (boardLogged < game.board.length) logStreets.one();
+}
+logStreets.one = () => {
   const names = { 3: 'flop', 4: 'turn', 5: 'river' };
-  while (boardLogged < game.board.length) {
-    const n = boardLogged === 0 ? 3 : boardLogged + 1;
-    note({ kind: 'log', act: 'street', street: names[n], board: game.board.slice(0, n), hand: game.handNo, text: '' });
-    boardLogged = n;
+  const n = boardLogged === 0 ? 3 : boardLogged + 1;
+  note({ kind: 'log', act: 'street', street: names[n], board: game.board.slice(0, n), hand: game.handNo, text: '' }, true);
+  boardLogged = n;
+};
+
+// ---------- карты раздаёт дилер ----------
+// Автораздача: в обычной игре — «Новая раздача: автоматически», в турнире — своя настройка.
+function autoDeal() { return tour.phase === 'play' ? !!rules.tourAutoDeal : rules.nextHand === 'auto'; }
+let streetReadyAt = 0;   // раньше этого момента дилер улицу не откроет (пауза при олл-ине)
+let streetTimer = null;  // автооткрытие: дилер не в сети или включили автораздачу
+let liveShownHand = 0;   // в какой раздаче карты олл-ина уже записаны в ход игры
+let liveCache = null;
+// олл-ин, улицы открывает дилер: шансы и ауты на текущей доске — для «Комбинаций»
+function liveStage() {
+  if (game.phase === 'idle' || game.runoutFrom == null) return null;
+  const key = game.handNo + ':' + game.board.length;
+  if (liveCache && liveCache.key === key) return liveCache.stage;
+  const holes = {};
+  game.seats.forEach((s, i) => { if (s && s.inHand && !s.folded) holes[i] = s.cards; });
+  const board = game.board.slice();
+  const eq = equities(holes, board);
+  liveCache = { key, stage: { board: board.length, eq, outs: outsOf(holes, board), live: true } };
+  return liveCache.stage;
+}
+function dealerClient() {
+  const s = game.seats[game.button];
+  return s ? clientById(s.id) : null;
+}
+// улица закрылась: при олл-ине — пауза перед кнопкой, карты участников — в ход игры; дилера нет в сети — открываем сами
+function onWaitStreet() {
+  const allIn = game.runoutFrom != null;
+  streetReadyAt = Date.now() + (allIn ? runoutPause({ board: game.board.length }) : 0);
+  if (allIn && liveShownHand !== game.handNo) {
+    liveShownHand = game.handNo;
+    game.seats.forEach((s) => { if (s && s.inHand && !s.folded) note({ kind: 'log', act: 'show', pid: s.id, name: s.name, cards: s.cards, handName: '', hand: game.handNo, text: `${s.name} показывает карты` }, true); });
   }
+  autoStreet();
+}
+function autoStreet() {
+  clearTimeout(streetTimer);
+  streetTimer = null;
+  if (!game.waitStreet || paused) return;
+  const d = dealerClient();
+  if (!autoDeal() && d && d.res) return; // дилер в сети — ждём его кнопку
+  streetTimer = setTimeout(() => { streetTimer = null; openStreetNow(); }, Math.max(700, streetReadyAt - Date.now()));
+}
+function openStreetNow() {
+  clearTimeout(streetTimer);
+  streetTimer = null;
+  if (!game.openStreet()) return;
+  afterAction();
 }
 
 function afterAction() {
+  if (game.phase === 'idle' && game.result && game.result.runout && !game.result.runout.live && boardLogged < game.board.length) logRunout();
+  if (game.waitStreet) onWaitStreet();
+  if (game.phase === 'idle' && game.result && game.result.runout && game.result.runout.live && liveShownHand === game.handNo) game.result.shownEarly = true;
   logStreets();
   if (game.phase === 'idle' && game.result) announceResult();
   if (game.phase === 'idle' && tour.phase === 'play') tourBusts();
@@ -324,11 +403,17 @@ function afterAction() {
   // при олл-ине карты на столах открываются по улицам (около 1,5 с на улицу) — даём время досмотреть
   const r = game.result;
   if (game.phase !== 'idle') return;
-  const delay = !r ? 3500 : r.runout ? 7000 + r.runout.stages.length * 1500 : r.showdown ? 7000 : r.rest ? 5000 : 3500;
+  // при олл-ине карты выходят с паузами (перед ривером дольше) — следующая раздача ждёт, пока клиенты их покажут
+  const replay = r && r.runout && !r.runout.live; // карты олл-ина клиенты показывают сами, по этапам
+  const delay = !r ? 3500 : replay ? 7000 + r.runout.stages.reduce((s, g) => s + runoutPause(g), 0) : r.showdown ? 7000 : r.rest ? 5000 : 3500;
   if (tour.phase === 'starting') { beginTournament(); return; }
   if (tour.phase === 'play' && tourAlive().length <= 1) { finishSoon(delay); return; }
   // По кнопке дилера: прошлая раздача остаётся на столе, пока следующий дилер не нажмёт «Новая раздача».
-  if (r && running && rules.nextHand === 'dealer') { waitDealer = true; push(); return; }
+  // при олл-ине дилер начинает новую раздачу только после того, как на столах открылись все карты
+  const shownIn = replay ? r.runout.stages.reduce((s, g) => s + runoutPause(g), 0) : 0;
+  runoutUntil = shownIn ? noteHoldUntil : 0; // тот же момент, что и итог банка в «Ходе игры»
+  if (shownIn) setTimeout(push, shownIn); // все увидят, что можно продолжать
+  if (r && running && !autoDeal()) { waitDealer = true; push(); return; }
   scheduleNextHand(delay);
 }
 
@@ -455,9 +540,35 @@ function endTournament() {
   push();
 }
 
+// Олл-ин и колл: карты участников открываются сразу — так их и пишем, следом за коллом, без названий комбинаций
+// (до открытия стола это подсказка). Улицы записываются в том же темпе, что открываются на столе.
+function logRunout() {
+  const r = game.result;
+  const hand = game.handNo;
+  const from = r.runout.from;
+  while (boardLogged < from) logStreets.one();
+  for (const i in r.hands) {
+    const s = game.seats[i];
+    if (s) note({ kind: 'log', act: 'show', pid: s.id, name: s.name, cards: s.cards, handName: '', hand, text: `${s.name} показывает карты` }, true);
+  }
+  let at = 0;
+  for (const g of r.runout.stages) {
+    at += runoutPause(g);
+    const n = g.board === 0 ? 3 : g.board + 1;
+    setTimeout(() => {
+      if (game.handNo !== hand) return;
+      const names = { 3: 'flop', 4: 'turn', 5: 'river' };
+      note({ kind: 'log', act: 'street', street: names[n], board: game.board.slice(0, n), hand, text: '' }, true);
+    }, at);
+  }
+  boardLogged = game.board.length;
+  r.shownEarly = true;
+  noteHoldUntil = Date.now() + at + 300; // итог банка — после ривера
+}
+
 function announceResult() {
   const r = game.result;
-  if (r.showdown) {
+  if (r.showdown && !r.shownEarly) {
     for (const i in r.hands) {
       const s = game.seats[i];
       if (s) note({ kind: 'log', act: 'show', pid: s.id, name: s.name, cards: s.cards, handName: r.hands[i].name, hand: game.handNo, text: `${s.name} показывает карты` });
@@ -536,6 +647,9 @@ function checkRebuyVotes() {
   }
 }
 
+// Пауза между улицами при докладке после олл-ина (перед ривером дольше). Клиент получает эти числа в hello.
+const RUNOUT_PAUSE = { street: 2200, river: 3500 };
+const runoutPause = (g) => (g.board === 4 ? RUNOUT_PAUSE.river : RUNOUT_PAUSE.street);
 function scheduleNextHand(delay) {
   clearTimeout(nextHandTimer);
   nextHandTimer = setTimeout(() => { nextHandTimer = null; tryStartHand(); }, delay);
@@ -571,6 +685,7 @@ function tryStartHand() {
   // фишка «D» переходит ровно к тому, кого все видели дилером
   const dealer = nextDealerSeat();
   if (dealer >= 0) game.button = (dealer + SEATS - 1) % SEATS;
+  game.holdStreets = !autoDeal(); // карты раздаёт дилер, если не включена автораздача
   game.startHand();
   boardLogged = 0;
   note({ kind: 'log', text: `Раздача ${game.handNo}`, act: 'deal', hand: game.handNo });
@@ -607,6 +722,7 @@ function resume() {
   paused = false;
   tourClock();
   if (game.toAct >= 0) armTurn(turnLeftOnPause);
+  autoStreet(); // улица ждала, а дилера нет — после паузы откроется сама
 }
 
 // ---------- команды игроков ----------
@@ -621,6 +737,13 @@ const int = (v, min, max) => {
 function removeClient(target, text, event) {
   const i = seatOf(target);
   let inHand = false;
+  // Кто вышел сам, того фишки и счёт докупок помним по нику до «Начать заново»: иначе проигравший всё
+  // вышел бы и вернулся под тем же ником со свежим стеком в обход лимита докупок. Удалённых админом забываем.
+  if (event === 'bye' && !tourOn()) {
+    const s = i >= 0 ? game.seats[i] : null;
+    const chips = s ? { stack: s.stack, buyins: s.buyins, bought: s.bought } : ledger.get(target.token);
+    if (chips) departed.set(target.name.toLowerCase(), chips);
+  }
   if (i >= 0) {
     const s = game.seats[i];
     inHand = game.phase !== 'idle' && s.inHand;
@@ -654,8 +777,11 @@ const commands = {
     const L = game.legal(i) || fail('Сейчас не ваш ход');
     const street = game.phase;
     const before = game.currentBet;
+    const seat = game.seats[i], betWas = seat.bet, inWas = seat.total;
     game.act(i, m.action, m.amount);
-    logAction(i, m.action, street, before, m.action === 'call' ? L.toCall : Math.floor(m.amount));
+    // сумма — сколько фишек игрок реально внёс: колл на олл-ине не больше стека, рейз — «до» итоговой ставки улицы
+    const put = seat.total - inWas;
+    logAction(i, m.action, street, before, m.action === 'call' ? put : betWas + put);
     afterAction();
   },
   // Игру запускает только админ. Остальные отмечают готовность; кто не отметил — пропускает раздачи, пока не нажмёт «Готов».
@@ -683,7 +809,32 @@ const commands = {
   chat(c, m) {
     const text = String(m.text || '').trim().slice(0, 200);
     if (!text) return;
+    // не чаще раза в 700 мс, как реакции: иначе поток сообщений вытеснит из истории ход игры
+    const now = Date.now();
+    if (now - (c.lastChat || 0) < 700) fail('Слишком часто');
+    c.lastChat = now;
     note({ kind: 'chat', from: c.id, name: c.name, avatar: c.avatar, text });
+  },
+  // После раздачи: кто сбросил карты, может их показать всем — до начала следующей раздачи.
+  showCards(c) {
+    const i = seatOf(c);
+    const s = i >= 0 ? game.seats[i] : null;
+    const res = game.result;
+    if (!s || game.phase !== 'idle' || !res || !s.inHand || s.cards.length !== 2) fail('Сейчас нечего показывать');
+    if (s.showedHand === game.handNo || (res.showdown && !s.folded)) return; // уже открыты
+    s.showedHand = game.handNo;
+    log(`${c.name} показывает карты`);
+    push();
+  },
+  // Победитель может попросить сбросивших показать карты: у него над аватаркой облачко «Покажи карты!». Раз за раздачу.
+  askShow(c) {
+    const i = seatOf(c);
+    const res = game.result;
+    if (i < 0 || game.phase !== 'idle' || !res || !(res.payouts[i] > 0)) fail('Попросить может только победитель раздачи');
+    if (game.askedHand === game.handNo) return;
+    game.askedHand = game.handNo;
+    broadcast('say', { from: c.id, text: 'Покажи карты!' });
+    push();
   },
   react(c, m) {
     const emoji = String(m.emoji || '').slice(0, 8);
@@ -863,10 +1014,20 @@ const commands = {
     if (!tourOn()) return;
     endTournament();
   },
+  // дилер открывает флоп, тёрн или ривер
+  street(c) {
+    if (!game.waitStreet) return;
+    if (seatOf(c) !== game.button) fail('Карты открывает дилер');
+    if (Date.now() < streetReadyAt - 150) fail('Сначала досмотрим карты');
+    openStreetNow();
+  },
   deal(c) {
     if (!waitDealer) return;
     if (seatOf(c) !== nextDealerSeat()) fail('Новую раздачу начинает дилер');
     waitDealer = false;
+    // нажали чуть раньше, чем допечатался итог олл-ина, — раздача начнётся сразу после него
+    const wait = runoutUntil - Date.now();
+    if (wait > 0) { push(); setTimeout(tryStartHand, wait); return; }
     tryStartHand();
   },
   // Новая игра: стеки, докупки и настройки стола возвращаются к заводским, все снова отмечают готовность.
@@ -885,6 +1046,7 @@ const commands = {
     clearTimeout(tour.finishTimer);
     tour = freshTour();
     ledger.clear();
+    departed.clear();
     pendingCfg = null;
     Object.assign(game.cfg, FACTORY.cfg);
     Object.assign(look, FACTORY.look);
@@ -982,6 +1144,11 @@ const commands = {
       if (!TOUR_REBUYS.includes(Number(m.tourRebuy))) fail('Нет такого числа докупок');
       rules.tourRebuy = Number(m.tourRebuy);
     }
+    if (m.tourAutoDeal !== undefined) {
+      rules.tourAutoDeal = !!m.tourAutoDeal;
+      log(rules.tourAutoDeal ? 'В турнире карты раздаются автоматически' : 'В турнире карты раздаёт дилер');
+      if (tour.phase === 'play') { game.holdStreets = !autoDeal(); if (autoDeal() && waitDealer) { waitDealer = false; scheduleNextHand(1500); } autoStreet(); }
+    }
     if (m.tourTurn !== undefined) {
       if (!TURN_OPTIONS.includes(Number(m.tourTurn))) fail('Нет такого времени на ход');
       rules.tourTurn = Number(m.tourTurn);
@@ -991,6 +1158,7 @@ const commands = {
       rules.nextHand = m.nextHand;
       log(rules.nextHand === 'auto' ? 'Новая раздача начинается автоматически' : 'Новую раздачу начинает дилер');
       if (rules.nextHand === 'auto' && waitDealer) { waitDealer = false; scheduleNextHand(1500); }
+      if (tour.phase !== 'play') { game.holdStreets = !autoDeal(); autoStreet(); }
     }
     if (m.turnMs !== undefined) {
       if (!TURN_OPTIONS.includes(Number(m.turnMs))) fail('Нет такого времени на ход');
@@ -1043,6 +1211,9 @@ const server = http.createServer(async (req, res) => {
       // компьютера), под этим ником можно вернуться: место, фишки и аватарка сохраняются, старый ключ перестаёт работать.
       if (same && same.res) fail('Такой ник уже занят');
       if (same) {
+        // Место админа можно вернуть только с компьютера, где запущена игра: иначе любой в сети,
+        // зная ник, получил бы права админа, пока тот перезагружает вкладку.
+        if (same.isHost && !isLocal(req, same)) fail('Этот ник принадлежит админу. Выберите другой');
         if (!m.reclaim) { json(res, 409, { error: `${same.name} сейчас не в сети. Если это вы — войдите снова, ваше место и фишки сохранятся.`, reclaim: true, avatar: same.avatar }); return; }
         const token = crypto.randomBytes(16).toString('hex');
         clients.delete(same.token);
@@ -1050,6 +1221,7 @@ const server = http.createServer(async (req, res) => {
         if (saved) { ledger.delete(same.token); ledger.set(token, saved); }
         if (tour.cash && tour.cash.people.has(same.token)) { tour.cash.people.set(token, tour.cash.people.get(same.token)); tour.cash.people.delete(same.token); }
         same.token = token;
+        same.isHost = isLocal(req, same);
         clients.set(token, same);
         log(`${same.name} возвращается в игру`);
         json(res, 200, { token });
@@ -1061,6 +1233,8 @@ const server = http.createServer(async (req, res) => {
       const token = crypto.randomBytes(16).toString('hex');
       const c = { id: nextId++, token, name, avatar: m.avatar, isHost: isLocal(req), res: null };
       clients.set(token, c);
+      const back = departed.get(name.toLowerCase());
+      if (back) { departed.delete(name.toLowerCase()); ledger.set(token, back); }
       if (!tourOn()) seatClient(c); // во время турнира новичок смотрит игру
       json(res, 200, { token });
       push();
@@ -1095,7 +1269,7 @@ const server = http.createServer(async (req, res) => {
       if (c.res) c.res.end();
       c.res = res;
       c.isHost = c.isHost || isLocal(req, c);
-      send(c, 'hello', { avatars: AVATARS, themes: THEMES, history });
+      send(c, 'hello', { avatars: AVATARS, themes: THEMES, history, build: BUILD, runoutPause: RUNOUT_PAUSE });
       // Если компьютер игрока пропал из сети без закрытия соединения (сон, выдернутый кабель),
       // проверки TCP раз в 5 секунд замечают это примерно за полминуты, а не за несколько минут.
       try { req.socket.setKeepAlive(true, 5000); } catch (e) { /* не страшно */ }
@@ -1133,6 +1307,7 @@ function goOffline(c, res) {
   if (acting && !turnTimer && !paused) { turnTotal = OFFLINE_TURN_MS; armTurn(OFFLINE_TURN_MS); }
   checkPauseVotes();
   checkRebuyVotes();
+  autoStreet(); // ушёл дилер — улицы открываются сами
   push();
 }
 

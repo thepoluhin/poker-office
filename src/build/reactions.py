@@ -14,7 +14,7 @@ COLS, ROWS = 4, 5
 SIZE = 256
 IDS = ['laugh', 'cool', 'shock', 'think',
        'angry', 'cry', 'love', 'wink',
-       'sleep', 'money', 'fire', 'rofl',
+       'sleep', 'money', 'fire', 'rofl',  # «Ржу» в игре больше нет — его место занял «Блефую» (build/reaction-one.py, reactions-source/bluff.jpg)
        'like', 'dislike', 'clap', 'pray',
        'facepalm', 'sweat', 'poker', 'eyeroll']
 
@@ -82,6 +82,8 @@ rgba = np.dstack([col, alpha * 255]).astype(np.uint8)
 os.makedirs(OUT, exist_ok=True)
 info = {}
 for i, rid in enumerate(IDS):
+    if rid == 'rofl':  # клетка листа осталась, а реакции в игре нет — картинку не делаем
+        continue
     x0, y0, x1, y1, comps = cells[i]
     # только свои компоненты (чужие края соседей не попадут)
     own = np.isin(lab, comps)

@@ -80,10 +80,14 @@ button:hover { background: var(--fill-hover); }
 button:active { transform: scale(.97); }
 button:disabled { opacity: .35; cursor: default; transform: none; }
 button:focus-visible, input:focus-visible { outline: 3px solid rgba(10, 132, 255, .45); outline-offset: 1px; }
+.seg button:focus-visible { outline: none; } /* у переключателя выбранная вкладка и так видна — рамка фокуса только мешает */
 button.primary { background: var(--blue); color: #fff; font-weight: 600; }
 button.primary:hover { background: #2b95ff; }
 button.danger { background: rgba(255, 69, 58, .16); color: var(--red); }
 button.danger:hover { background: rgba(255, 69, 58, .26); }
+/* «Колл · олл-ин»: тонированная кнопка своим цветом — не обычный серый колл и не красный «Фолд» */
+button.allin-call { background: rgba(255, 159, 10, .18); color: #ff9f0a; }
+button.allin-call:hover { background: rgba(255, 159, 10, .28); }
 button.large { height: var(--h2); padding: 0 var(--s5); border-radius: var(--r2); font-size: 15px; font-weight: 600; }
 button.icon { width: 36px; padding: 0; display: inline-flex; align-items: center; justify-content: center; background: transparent; color: var(--label-2); position: relative; }
 button.icon:hover, button.icon.on { background: var(--fill); color: var(--label); }
@@ -129,7 +133,9 @@ input[type=range]::-moz-range-thumb { width: 24px; height: 24px; border: 0; bord
 .plus { color: var(--green); } .minus { color: var(--red); }
 
 /* ---------- 4. Вход ---------- */
-#login { height: 100%; display: flex; align-items: center; justify-content: center; }
+#login { height: 100%; display: flex; align-items: center; justify-content: center; overflow-y: auto; }
+/* низкое окно (телефон боком): форма прижата к верху и прокручивается, а не срезается */
+#login > .sheet { margin: auto; }
 .sheet { border-radius: var(--r4); box-shadow: var(--shadow-3); padding: var(--s6); width: min(400px, calc(var(--vw) * .92)); animation: sheet .35s var(--ease); }
 @keyframes sheet { from { transform: scale(.96) translateY(8px); opacity: 0; } }
 @keyframes fade { from { opacity: 0; } }
@@ -256,6 +262,9 @@ body[data-cards="four"] .card.s-c { color: #169c46; }
 .flychip { position: absolute; z-index: 7; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%; background: var(--c); box-shadow: inset 0 0 0 2.5px rgba(255, 255, 255, .45), inset 0 0 0 5px rgba(0, 0, 0, .12), 0 2px 5px rgba(0, 0, 0, .5); }
 /* места игроков */
 .seat { position: absolute; transform: translate(-50%, -50%); width: 132px; text-align: center; }
+/* Узкий стол (открыты обе панели): места, ставки, кнопка D и центр (банк, общие карты) уменьшаются вместе со столом, --ts считает app.js.
+   Начало координат в левом верхнем углу, чтобы центр элемента остался в точке привязки. */
+.seat, .bet, .dealer, #center { scale: var(--ts, 1); transform-origin: 0 0; }
 .av { position: relative; width: 68px; height: 68px; margin: 0 auto; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 36px; background: linear-gradient(#48484c, #2c2c2e); box-shadow: 0 0 0 .5px rgba(255, 255, 255, .16), 0 6px 16px rgba(0, 0, 0, .45); transition: opacity .25s, box-shadow .25s; }
 .ring { position: absolute; inset: -7px; width: 82px; height: 82px; transform: rotate(-90deg); }
 .ring circle { fill: none; stroke-width: 4; }
@@ -280,6 +289,26 @@ body[data-cards="four"] .card.s-c { color: #169c46; }
    а значки МБ/ББ и реакций (с 36 px) её не задевают */
 .off-band { position: absolute; left: 0; right: 0; top: 16px; height: 20px; background: rgba(0, 0, 0, .78); color: #fff; font-size: 11px; font-weight: 700; line-height: 20px; text-align: center; letter-spacing: .04em; }
 .seat.offline .nm { color: var(--label-2); }
+/* олл-ин: как «офлайн», только в красных тонах — красная полоса «олл-ин» и аватарка в красном до конца раздачи */
+.off-band.ai { background: rgba(255, 69, 58, .92); }
+.seat.allin .face img, .seat.allin .face > :not(.off-band) { filter: grayscale(1) brightness(.75) sepia(1) saturate(3.5) hue-rotate(-35deg); }
+.seat.allin .av { box-shadow: 0 0 0 1.5px rgba(255, 69, 58, .7), 0 6px 16px rgba(0, 0, 0, .45); }
+/* открытие карт при олл-ине: свет только на участниках и общих картах */
+.seat { transition: opacity .35s var(--ease); }
+.seat.dark { opacity: .3; }
+#table.spot .bet, #table.spot .dealer { opacity: .3; }
+#felt::after { content: ""; position: absolute; inset: 0; border-radius: inherit; background: radial-gradient(ellipse 48% 58% at 50% 46%, rgba(0, 0, 0, 0) 45%, rgba(0, 0, 0, .5) 100%); opacity: 0; transition: opacity .5s var(--ease); pointer-events: none; }
+#table.spot #felt::after { opacity: 1; }
+/* перед ривером место под карту мягко пульсирует жёлтым */
+#board .slot.next { animation: slot-next 1s ease-in-out infinite alternate; }
+@keyframes slot-next { from { box-shadow: 0 0 0 1.5px rgba(255, 214, 10, .35); } to { box-shadow: 0 0 0 2px rgba(255, 214, 10, .9), 0 0 22px rgba(255, 214, 10, .55); background: rgba(255, 214, 10, .08); } }
+.hand.outs { margin-top: 2px; font-size: 11px; }
+/* облачко «Олл-ин!» — как сообщение из чата, только красное */
+.bubble.allin { background: var(--red); color: #fff; font-weight: 600; white-space: nowrap; }
+.bubble.allin::after { background: var(--red); }
+/* «Покажи карты!» — облачко победителя, акцентным синим */
+.bubble.req, .bubble.raise, .bubble.act { background: var(--blue); color: #fff; font-weight: 600; white-space: nowrap; } /* «Покажи карты!», «Ставка!», «Рейз!» */
+.bubble.req::after, .bubble.raise::after, .bubble.act::after { background: var(--blue); }
 .seat.offline .st { color: var(--label-2); }
 .seat.dealer-wait.offline .av { animation: none; box-shadow: 0 0 0 2px var(--blue), 0 6px 16px rgba(0, 0, 0, .45); }
 .seat.empty .av { background: rgba(0, 0, 0, .18); box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, .16); font-size: 11px; color: var(--label-3); }
@@ -290,6 +319,7 @@ body[data-cards="four"] .card.s-c { color: #169c46; }
 .seat.me { width: 160px; }
 .seat.me .hole { position: static; justify-content: center; gap: 6px; margin-bottom: var(--s2); }
 .seat.folded .hole { opacity: .35; }
+.seat.folded.showed .hole { opacity: 1; } /* сбросил, но показал карты после раздачи */
 /* Шансы при олл-ине: капсула под плашкой игрока, лидер жёлтый. */
 .odds { display: inline-block; margin-top: var(--s1); height: 24px; padding: 0 var(--s3); border-radius: var(--pill); background: rgba(28, 28, 30, .85); color: #fff; font-size: 13px; font-weight: 700; line-height: 24px; box-shadow: var(--shadow-1); animation: fade .25s; }
 .odds.lead { background: var(--yellow); color: #1c1c1e; }
@@ -307,6 +337,7 @@ body[data-cards="four"] .card.s-c { color: #169c46; }
 #status .hint + .win { margin-top: var(--s2); } /* подсказка про полупрозрачные карты — над итогом */
 .hand { margin-top: var(--s1); font-size: 11px; font-weight: 500; color: var(--yellow); text-shadow: 0 1px 2px rgba(0, 0, 0, .7); }
 .bet { position: absolute; transform: translate(-50%, -50%); height: 24px; padding: 0 var(--s3) 0 var(--s2); border-radius: var(--pill); font-size: 12px; font-weight: 600; line-height: 24px; white-space: nowrap; box-shadow: var(--shadow-1); }
+.bet.l { transform: translate(0, -50%); } .bet.r { transform: translate(-100%, -50%); }
 .bet::before { content: ""; display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 50%; background: var(--yellow); box-shadow: 0 0 0 1.5px rgba(0, 0, 0, .25); vertical-align: -1px; }
 .dealer { position: absolute; transform: translate(-50%, -50%); width: 24px; height: 24px; border-radius: 50%; background: #fff; color: #1c1c1e; font-size: 11px; font-weight: 700; line-height: 24px; text-align: center; box-shadow: var(--shadow-1); }
 /* Кнопка реакций и значки МБ/ББ — «спутники» сбоку аватарки на высоте 26–54 px: до плашки с ником (с 58 px) остаётся 4 px,
@@ -340,6 +371,29 @@ footer { flex: none; height: 188px; padding: 0 var(--s4) var(--s4); display: fle
 .acts button span { font-weight: 400; opacity: .8; margin-left: var(--s1); }
 .acts .step { flex: none; width: var(--h3); font-size: 26px; font-weight: 300; line-height: 1; }
 .sizing { display: flex; align-items: center; gap: var(--s2); }
+/* кнопка дилера («Открыть флоп», «Новая раздача»): жёлтая и мягко мигает с момента появления */
+button.primary.deal-go { background: var(--yellow); color: #1c1c1e; animation: deal-blink 1.1s ease-in-out infinite alternate; } /* дилер открывает карты: главное действие — жёлтым, мигает сразу */
+button.primary.deal-go:hover { background: #ffe14d; }
+@keyframes deal-blink { to { background: #ffe14d; box-shadow: 0 0 0 3px rgba(255, 214, 10, .35), 0 0 24px rgba(255, 214, 10, .6); } }
+/* меню рейза: чистый ползунок, ряд быстрых размеров, внизу «Отмена · Ставка N · N ББ» — симметрично */
+.dock.raise { gap: var(--s2); padding: var(--s2) 10px 10px; }
+.dock.raise .acts button, .dock.raise .acts input { height: 40px; font-size: 15px; }
+.rslider { position: relative; height: 22px; margin: 0 var(--s2); }
+#raiseRange { position: absolute; inset: 0; width: 100%; height: 22px; margin: 0; background: transparent; -webkit-appearance: none; appearance: none; cursor: pointer; }
+#raiseRange::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: linear-gradient(to right, var(--blue) var(--p, 0%), rgba(255, 255, 255, .14) var(--p, 0%)); }
+#raiseRange::-moz-range-track { height: 4px; border-radius: 2px; background: linear-gradient(to right, var(--blue) var(--p, 0%), rgba(255, 255, 255, .14) var(--p, 0%)); }
+#raiseRange::-webkit-slider-thumb { -webkit-appearance: none; width: 22px; height: 22px; margin-top: -9px; border-radius: 50%; background: #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, .45); }
+#raiseRange::-moz-range-thumb { width: 22px; height: 22px; border: 0; border-radius: 50%; background: #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, .45); }
+#raiseRange:focus-visible { outline: none; }
+#raiseRange:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(10, 132, 255, .5), 0 1px 4px rgba(0, 0, 0, .45); }
+.acts .rbb { flex: none; width: 96px; font-variant-numeric: tabular-nums; }
+.acts button.rbb span { color: var(--label-2); font-size: 13px; font-weight: 400; }
+.acts input.rbb { padding: 0 var(--s2); border-radius: var(--r2); text-align: center; font-weight: 600; }
+.rmarks { display: flex; gap: var(--s1); } /* ровный ряд капсул: подписи не сталкиваются, засечки на ползунке показывают, куда они встанут */
+.rmarks button { flex: 1; height: 26px; padding: 0; border-radius: var(--pill); background: rgba(120, 120, 128, .2); font-size: 12px; color: var(--label-2); }
+.rmarks button:hover { color: var(--label); background: rgba(120, 120, 128, .32); }
+.rmarks button.on { color: var(--blue); background: rgba(10, 132, 255, .18); box-shadow: inset 0 0 0 1px rgba(10, 132, 255, .55); font-weight: 600; }
+.acts .cancel { flex: none; width: 96px; color: var(--label-2); }
 .sizing .seg { flex: 1; }
 .field { display: flex; align-items: center; height: var(--h1); padding: var(--s1); border-radius: var(--r2); background: var(--well); box-shadow: inset 0 0 0 .5px var(--separator); }
 .field input { width: 68px; height: 24px; padding: 0 var(--s1) 0 var(--s2); border: 0; background: transparent; text-align: right; font-weight: 600; }
@@ -373,10 +427,10 @@ footer { flex: none; height: 188px; padding: 0 var(--s4) var(--s4); display: fle
 @keyframes slide-l { from { transform: translateX(-40px); opacity: 0; } }
 @keyframes slide-r { from { transform: translateX(40px); opacity: 0; } }
 /* Шапка панели: переключатель вкладок ровно по центру, кнопка «закрыть» справа. Поля одинаковые слева и справа. */
-.panel .head { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: var(--s3); height: 64px; padding: 0 var(--s3); font-size: 15px; font-weight: 600; box-shadow: 0 .5px 0 var(--separator); flex: none; }
+.panel .head { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: var(--s3); height: 64px; padding: 0 var(--s3); font-size: 15px; font-weight: 600; flex: none; } /* без линии под шапкой: панель читается материалом, а не рамками */
 .panel .head > .seg { grid-column: 2; }
 .panel .head > .icon { grid-column: 3; justify-self: end; }
-.panel .body { flex: 1; overflow-y: auto; padding: 0 var(--s4) var(--s4); }
+.panel .body { flex: 1; overflow-y: auto; padding: var(--s2) var(--s4) var(--s4); }
 /* Крестик админа в «Игроках»: компактный, 28 px; в своей строке пустое место той же ширины. */
 .prow .icon.pm { width: 28px; height: 28px; border-radius: var(--r1); }
 .prow .icon.pm .ic { width: 16px; height: 16px; }
@@ -389,6 +443,8 @@ footer { flex: none; height: 188px; padding: 0 var(--s4) var(--s4); display: fle
 .prow .pn { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .prow .ps { font-size: 11px; color: var(--label-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .prow .pr { text-align: right; }
+.prow.off .pav { opacity: .55; filter: grayscale(.6); } /* не в сети: аватарка приглушена, как у места «офлайн» */
+.prow.off .pn { color: var(--label-2); }
 .prow .pr b { font-weight: 600; }
 .prow .pr small { display: block; font-size: 11px; color: var(--label-2); }
 .combo .num { width: 16px; color: var(--label-3); font-size: 12px; }
@@ -400,6 +456,42 @@ footer { flex: none; height: 188px; padding: 0 var(--s4) var(--s4); display: fle
 .combo.have { background: rgba(48, 209, 88, .16); box-shadow: inset 3px 0 0 var(--green), inset 0 .5px 0 var(--separator); }
 .combo.have .cs { color: var(--green); font-weight: 600; }
 .combo.off { opacity: .35; }
+/* соберётся следующей картой: стопка тех самых карт вместо образца, ширина та же */
+.combo .cc.pile-fit { gap: 0; }
+/* «Комбинации», вариант «сначала ваша рука» */
+#sideBody .group + .group { margin-top: var(--s3); } /* блоки не слипаются */
+.group.note { padding: var(--s3); text-align: center; font-size: 12px; color: var(--label-2); }
+.hero { padding: var(--s3); text-align: center; }
+.hero .hs { font-size: 11px; color: var(--label-2); }
+.hero .hn { margin: 2px 0 var(--s2); font-size: 17px; font-weight: 600; color: var(--green); }
+.hero .hc { display: flex; justify-content: center; gap: 3px; }
+.card.xs.dimc { opacity: .45; }
+.combo .ocount { min-width: 22px; text-align: right; font-size: 13px; font-weight: 600; color: var(--yellow); }
+.combos-more { display: block; width: 100%; margin: var(--s3) 0; height: 36px; border-radius: var(--r2); background: rgba(120, 120, 128, .14); color: var(--label-2); font-size: 13px; }
+/* олл-ин в «Комбинациях»: шансы полосой, свои ауты стопкой */
+.eqrow .eqbar { height: 4px; margin-top: 5px; border-radius: 2px; background: rgba(255, 255, 255, .12); overflow: hidden; }
+.eqrow .eqbar i { display: block; height: 100%; border-radius: 2px; background: var(--label-2); transition: width .6s var(--ease); }
+.eqrow .eqbar i.lead { background: var(--yellow); }
+.eqrow .eqv { min-width: 44px; text-align: right; font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.eqrow .eqv.lead { color: var(--yellow); }
+.outsbox { padding: var(--s3) var(--s3) var(--s2); text-align: center; }
+.outsbox .dock-cap { padding: 0 0 var(--s2); font-size: 12px; font-weight: 500; color: var(--label-2); }
+.outsbox .dock-cap b { color: var(--label); font-weight: 600; }
+.outsbox .dock-cap.hit { color: var(--yellow); }
+.outsbox .pile { display: flex; flex-wrap: wrap; justify-content: center; gap: 3px; }
+.outsbox .pile .card { box-shadow: 0 0 0 .5px rgba(0, 0, 0, .25); transition: opacity .3s var(--ease), box-shadow .3s var(--ease); }
+.outsbox .pile .card.hit { z-index: 1; box-shadow: 0 0 0 2px var(--yellow), 0 0 14px rgba(255, 214, 10, .8); }
+.outsbox .pile .card.miss { opacity: .3; }
+.combo .cc.pile-fit .card { box-shadow: -2px 0 4px rgba(0, 0, 0, .3), 0 0 0 .5px rgba(0, 0, 0, .25); }
+/* личная панель аутов при олл-ине (внизу, видит только сам игрок) */
+.dock .pile { display: flex; justify-content: center; gap: 3px; padding: 2px 0 var(--s1); }
+.dock .pile.tight { gap: 0; }
+.dock .pile.tight .card + .card { margin-left: -11px; }
+.dock .pile .card { box-shadow: -2px 0 4px rgba(0, 0, 0, .3), 0 0 0 .5px rgba(0, 0, 0, .25); transition: opacity .3s var(--ease), box-shadow .3s var(--ease); }
+.dock .pile .card.hit { z-index: 1; box-shadow: 0 0 0 2px var(--yellow), 0 0 14px rgba(255, 214, 10, .8); }
+.dock .pile .card.miss { opacity: .3; }
+.dock-cap b { color: var(--label); font-weight: 600; }
+.dock-cap.hit { color: var(--yellow); }
 /* Вкладка «Профиль»: аватарка 56, ник 17 / 600; группы и подписи как везде в панелях. */
 .prof { display: flex; align-items: center; gap: var(--s3); padding-top: var(--s4); }
 .prof .pav { width: 56px; height: 56px; border-radius: 50%; overflow: hidden; flex: none; display: flex; align-items: center; justify-content: center; font-size: 32px; background: var(--fill); }
@@ -416,7 +508,8 @@ footer { flex: none; height: 188px; padding: 0 var(--s4) var(--s4); display: fle
 .rx-pick button { position: relative; height: auto; aspect-ratio: 1; padding: var(--s2); border-radius: var(--r2); background: rgba(120, 120, 128, .14); box-shadow: inset 0 0 0 .5px var(--separator); }
 .rx-pick .rx { width: 100%; height: 100%; margin: 0; } /* в плитке — с воздухом вокруг, точка «выбрано» не налезает */
 .rx-pick button.on {background: rgba(10, 132, 255, .18); box-shadow: inset 0 0 0 1.5px var(--blue); }
-.rx-pick button.on::after { content: ""; position: absolute; top: 6px; right: 6px; width: 8px; height: 8px; border-radius: 50%; background: var(--blue); }
+/* номер — место на дуге у кнопки реакций, слева направо, в порядке выбора */
+.rx-pick .rx-n { position: absolute; top: 5px; right: 5px; min-width: 18px; height: 18px; border-radius: 9px; background: var(--blue); color: #fff; font: 600 11px/18px var(--font); text-align: center; font-variant-numeric: tabular-nums; }
 .line.stack { flex-direction: column; align-items: stretch; gap: var(--s2); padding: var(--s3) var(--s3) var(--s3) var(--s4); }
 .log { flex: 1; overflow-y: auto; padding: var(--s3) var(--s4); display: flex; flex-direction: column; gap: var(--s1); }
 #gameLog .event { align-self: flex-start; text-align: left; font-size: 12px; color: var(--label-2); padding: 2px 0; }
@@ -424,10 +517,10 @@ footer { flex: none; height: 188px; padding: 0 var(--s4) var(--s4); display: fle
 #gameLog .event.deal:first-child { margin-top: 0; padding-top: 0; box-shadow: none; }
 .log .empty { margin: auto; color: var(--label-3); text-align: center; }
 /* Ход игры: раздачи по улицам, у каждого игрока свой цвет (по номеру места), фильтр по игроку. */
-#logFilter { display: flex; flex-wrap: wrap; gap: var(--s1); padding: var(--s3) var(--s4) var(--s1); flex: none; box-shadow: 0 .5px 0 var(--separator); }
+#logFilter { display: flex; flex-wrap: wrap; gap: var(--s1); padding: var(--s2) var(--s4) var(--s1); flex: none; }
 #logFilter button { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 var(--s3); border-radius: var(--pill); font-size: 12px; }
 #logFilter button.on { background: var(--blue); color: #fff; }
-#logFilter i, .la i { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--pc, var(--label-3)); }
+#logFilter > button > i, .la > i { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--pc, var(--label-3)); }
 #gameLog { gap: 2px; }
 .handhd { margin-top: var(--s4); padding-top: var(--s3); box-shadow: inset 0 .5px 0 var(--separator); font-weight: 600; }
 .handhd:first-child { margin-top: 0; padding-top: 0; box-shadow: none; }
@@ -457,7 +550,8 @@ img.mini { width: 18px; height: 18px; border-radius: 50%; display: block; }
 #chatForm input { flex: 1; min-width: 0; padding: 0 var(--s4); border-radius: var(--pill); }
 
 /* Запрос, который ждёт вашего решения (пауза, докупка): карточка под верхней панелью по оси стола. 20 снаружи, отступ 8, кнопки 12. */
-.ask { position: absolute; z-index: 25; top: 72px; left: calc(50% + (var(--left) - var(--side)) / 2); transform: translateX(-50%); width: 400px; padding: var(--s2); border-radius: var(--r4); box-shadow: 0 0 0 1.5px var(--yellow), var(--shadow-3); text-align: center; animation: fade .2s; }
+/* по центру сукна, как остальные окна: сверху карточка закрывала верхнего игрока и его таймер */
+.ask { position: absolute; z-index: 25; top: calc(50% + var(--tdy, 0px)); left: calc(50% + (var(--left) - var(--side)) / 2); transform: translate(-50%, -50%); width: 400px; padding: var(--s2); border-radius: var(--r4); box-shadow: 0 0 0 1.5px var(--yellow), var(--shadow-3); text-align: center; animation: fade .2s; }
 .ask-t { margin-top: var(--s2); font-size: 17px; font-weight: 600; }
 .ask-s { margin: var(--s1) 0 var(--s3); color: var(--label-2); }
 .ask .acts button { height: var(--h2); font-size: 15px; }

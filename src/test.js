@@ -180,6 +180,29 @@ test('все сбросили — банк забирает оставшийся
   assert.strictEqual(g.seats[0].stack, 1030);
   assert.strictEqual(chips(g), 3000);
 });
+test('игрок ушёл, пока улица ждёт дилера: торговля заново не открывается', () => {
+  const g = table([1000, 1000, 1000]);
+  g.holdStreets = true;
+  g.startHand();
+  g.act(g.toAct, 'call'); g.act(g.toAct, 'call'); g.act(g.toAct, 'check');
+  assert.strictEqual(g.waitStreet, true);
+  g.forceFold(1);
+  assert.strictEqual(g.waitStreet, true);
+  assert.strictEqual(g.toAct, -1);
+  assert.throws(() => g.act(0, 'raise', 200));
+  g.openStreet();
+  assert.strictEqual(g.phase, 'flop');
+  assert.strictEqual(g.currentBet, 0);
+});
+test('двое ушли, пока улица ждёт дилера: банк забирает оставшийся', () => {
+  const g = table([1000, 1000, 1000]);
+  g.holdStreets = true;
+  g.startHand();
+  g.act(g.toAct, 'call'); g.act(g.toAct, 'call'); g.act(g.toAct, 'check');
+  g.forceFold(1); g.forceFold(2);
+  assert.strictEqual(g.phase, 'idle');
+  assert.strictEqual(chips(g), 3000);
+});
 test('минимальный рейз равен предыдущему повышению', () => {
   const g = table([1000, 1000, 1000]);
   g.startHand();

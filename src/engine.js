@@ -152,6 +152,44 @@ function equities(holes, board, samples) {
   return out;
 }
 
+// Ауты: какие следующие карты выводят вперёд (или в ничью) того, кто сейчас проигрывает по собранной комбинации,
+// — для подписи «аутов: N» при олл-ине. Считаются только до тёрна и до ривера; у того, кто сейчас впереди, аутов нет.
+function outsOf(holes, board) {
+  if (board.length !== 3 && board.length !== 4) return null;
+  const ids = Object.keys(holes);
+  const beats = (i, full) => {
+    const mine = evaluate(holes[i].concat(full));
+    return ids.every((j) => j === i || compareScores(mine, evaluate(holes[j].concat(full))) >= 0);
+  };
+  const known = new Set(board.concat(...ids.map((i) => holes[i])));
+  const deck = newDeck().filter((c) => !known.has(c));
+  const outs = {};
+  for (const i of ids) {
+    if (beats(i, board)) continue; // уже впереди или делит
+    outs[i] = deck.filter((x) => beats(i, board.concat(x)));
+  }
+  return outs;
+}
+
+// Обычная раздача (карты соперников закрыты): какие следующие карты усилят вашу руку — переведут её
+// в комбинацию старше нынешней, причём с участием ваших карт (то, что просто спарит стол, не считается).
+// Ответ — { категория: [карты] }, каждая карта в одной, лучшей категории. Только на флопе и тёрне.
+function improveOuts(hole, board) {
+  if (board.length !== 3 && board.length !== 4) return null;
+  const cat = (s) => (s[0] === 8 && s[1] === 14 ? 9 : s[0]); // роял-флеш — своя строка
+  const made = cat(evaluate(hole.concat(board)));
+  const known = new Set(hole.concat(board));
+  const out = {};
+  for (const x of newDeck()) {
+    if (known.has(x)) continue;
+    const c = cat(evaluate(hole.concat(board, x)));
+    if (c <= made) continue;
+    if (cat(evaluate(board.concat(x))) >= c) continue; // это рука стола, а не ваша
+    (out[c] = out[c] || []).push(x);
+  }
+  return out;
+}
+
 function compareScores(a, b) {
   for (let i = 0; i < Math.max(a.length, b.length); i++) {
     const d = (a[i] || 0) - (b[i] || 0);
@@ -254,6 +292,7 @@ class Game {
     this.result = null;
     this.handNo++;
     this.runoutFrom = null; // с какой улицы карты докладывались без торговли (все в олл-ине)
+    this.waitStreet = false; // улица закрыта и ждёт дилера (при holdStreets)
     const sbSeat = players === 2 ? this.button : this.nextSeat(this.button, inHand);
     const bbSeat = this.nextSeat(sbSeat, inHand);
     this.sbSeat = sbSeat;
@@ -346,6 +385,8 @@ class Game {
     s.folded = true;
     const alive = this.seats.filter((p) => p && p.inHand && !p.folded);
     if (alive.length === 1) return this._finish(false);
+    // Улица уже закрыта и ждёт дилера: торговлю на ней заново не открываем.
+    if (this.waitStreet || this.toAct < 0) return;
     if (!this._needsAction(this.toAct)) this._advance(this.toAct);
   }
 
@@ -369,6 +410,20 @@ class Game {
     this.currentBet = 0;
     this.minRaise = this.cfg.bb;
     if (this.phase === 'river') return this._finish(true);
+    // Карты раздаёт дилер: круг торговли закончился — следующая улица ждёт его команды (openStreet).
+    if (this.holdStreets) { this.waitStreet = true; this.toAct = -1; return; }
+    this._dealStreet();
+  }
+
+  // Дилер открывает следующую улицу. false — если открывать нечего.
+  openStreet() {
+    if (!this.waitStreet || this.phase === 'idle') return false;
+    this.waitStreet = false;
+    this._dealStreet();
+    return true;
+  }
+
+  _dealStreet() {
     if (this.phase === 'preflop') {
       this.phase = 'flop';
       this.board.push(this.deck.pop(), this.deck.pop(), this.deck.pop());
@@ -442,8 +497,12 @@ class Game {
     if (showdown && this.runoutFrom != null) {
       const holes = {};
       for (const i of alive) holes[i] = this.seats[i].cards;
-      const stages = [0, 3, 4].filter((n) => n >= this.runoutFrom).map((n) => ({ board: n, eq: equities(holes, this.board.slice(0, n)) }));
-      runout = { from: this.runoutFrom, stages };
+      const stages = [0, 3, 4].filter((n) => n >= this.runoutFrom).map((n) => {
+        const board = this.board.slice(0, n);
+        const eq = equities(holes, board);
+        return { board: n, eq, outs: outsOf(holes, board) };
+      });
+      runout = { from: this.runoutFrom, stages, live: !!this.holdStreets }; // live — улицы уже открывал дилер, повторять не нужно
     }
     // Все сбросили до ривера: какие карты стола пришли бы дальше (по порядку колоды).
     let rest = null;
@@ -456,4 +515,4 @@ class Game {
   }
 }
 
-module.exports = { Game, evaluate, bestFive, outlook, equities, compareScores, handName, newDeck, shuffle, SEATS };
+module.exports = { Game, outsOf, improveOuts, evaluate, bestFive, outlook, equities, compareScores, handName, newDeck, shuffle, SEATS };

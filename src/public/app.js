@@ -12,7 +12,7 @@ const REACTION_DEFAULT = ['laugh', 'cool', 'shock', 'think', 'angry', 'cry'];
 const REACTIONS = {
   laugh: ['Смех'], cool: ['Круто'], shock: ['Шок'], think: ['Хм…'], angry: ['Злюсь'], cry: ['Слёзы'],
   // дополнительные — каждый игрок сам выбирает шесть для своей кнопки
-  love: ['Влюблён'], wink: ['Подмигиваю'], sleep: ['Сплю'], money: ['Деньги'], fire: ['Огонь'], rofl: ['Ржу'],
+  love: ['Влюблён'], wink: ['Подмигиваю'], sleep: ['Сплю'], money: ['Деньги'], fire: ['Огонь'], bluff: ['Блефую'],
   like: ['Класс'], dislike: ['Не очень'], clap: ['Браво'], pray: ['Пожалуйста'], facepalm: ['Фейспалм'],
   sweat: ['Нервничаю'], poker: ['Покерфейс'], eyeroll: ['Ну-ну'],
 };
@@ -22,8 +22,10 @@ const THEME_NAMES = { classic: 'Зелёное', graphite: 'Графит', burgu
 // Координаты в процентах от стола; место 0 — всегда ваше, внизу по центру.
 const POS = [[50, 90], [9, 62], [16, 19], [50, 10], [84, 19], [91, 62]];
 // У верхнего места ставка и кнопка дилера стоят выше ряда «фишки · банк · часы», по бокам от плашки, зеркально.
-const BET = [[37, 67], [25, 56], [29, 35], [36, 18], [71, 35], [75, 56]];
-const DEALER = [[63, 67], [20, 47], [24, 33], [64, 18], [76, 33], [80, 47]];
+// У боковых мест (1 и 5) капсула привязана краем к картам, а не центром: иначе длинная сумма наезжает на карту.
+const BET = [[37, 67], [23.6, 56], [29, 34], [36, 18], [71, 34], [76.4, 56]];
+const BET_EDGE = { 1: ' l', 5: ' r' };
+const DEALER = [[63, 72], [20, 47], [22, 31], [64, 18], [78, 31], [80, 47]];
 const RING = 2 * Math.PI * 37;
 // Значок блайнда: такая же круглая кнопка, как кнопка реакций, и стоит зеркально к ней.
 // У своего места реакции слева — значок справа; у соперников значок на стороне, где нет карт.
@@ -42,7 +44,8 @@ function winChip(n, left) {
 const REACT_BTN ='<button class="react-btn" title="Реакции"><svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.3c1 1.3 2.2 1.9 3.5 1.9s2.5-.6 3.5-1.9"/><path d="M9 9.4v.8M15 9.4v.8"/></svg></button>';
 
 const prefs = Object.assign({ unit: 'chips', betUnit: 'chips', sound: true, zoom: 1, reactions: REACTION_DEFAULT }, JSON.parse(localStorage.getItem('poker-prefs') || '{}'));
-prefs.reactions = (prefs.reactions || []).filter((id) => REACTIONS[id]).slice(0, 6);
+// «Ржу» заменён чертёнком «Блефую» — у кого он стоял на кнопке, встаёт чертёнок
+prefs.reactions = (prefs.reactions || []).map((id) => (id === 'rofl' ? 'bluff' : id)).filter((id) => REACTIONS[id]).slice(0, 6);
 if (!prefs.reactions.length) prefs.reactions = REACTION_DEFAULT.slice();
 const savePrefs = () => localStorage.setItem('poker-prefs', JSON.stringify(prefs));
 
@@ -62,6 +65,12 @@ function fitScale() {
 }
 window.addEventListener('resize', fitScale);
 fitScale();
+// Места рассчитаны на стол шириной от 900 px. Уже — уменьшаем их вместе со столом (не меньше 0,7).
+new ResizeObserver(([e]) => {
+  const ts = Math.max(0.7, Math.min(1, e.contentRect.width / 900));
+  const t = $('table');
+  if (t.style.getPropertyValue('--ts') !== String(ts)) t.style.setProperty('--ts', ts);
+}).observe(document.getElementById('table'));
 // Окна (итоги турнира, меню админа, пауза) стоят по центру стола. По горизонтали их сдвигают панели (CSS),
 // по вертикали — разница высоты шапки и панели действий: её и передаём в CSS как --tdy.
 function alignModals() {
@@ -82,6 +91,7 @@ let avatar = null;
 let deadline = 0;
 let raiseTo = 0;
 let footerKey = '';
+let pageBuild = ''; // отпечаток сборки, с которой загружена страница
 let turnKey = '';
 let prevBoard = 0;
 let prevHand = 0;
@@ -148,6 +158,10 @@ const SND = {
   win: () => [523, 659, 784, 1047].forEach((f, i) => tone(f, 0.22, 'triangle', 0.07, i * 0.1)),
   pause: () => tone(440, 0.25, 'sine', 0.06),
   msg: () => tone(1250, 0.05, 'sine', 0.035),
+  // олл-ин: тяжёлый двойной удар ниже обычных фишек
+  allin: () => { tone(196, 0.16, 'triangle', 0.1); tone(147, 0.24, 'triangle', 0.1, 0.12); tone(2400, 0.03, 'triangle', 0.05, 0.05); },
+  // перед ривером: три удара сердца
+  heartbeat: () => { tone(70, 0.11, 'sine', 0.35); tone(58, 0.14, 'sine', 0.3, 0.17); }, // один удар «тук-тук»; ритм задаёт открытие карт
 };
 document.addEventListener('pointerdown', () => { if (ac && ac.state === 'suspended') ac.resume(); });
 
@@ -210,6 +224,11 @@ function connect() {
   $('game').hidden = false;
   es = new EventSource('/api/events?token=' + token);
   es.addEventListener('hello', (e) => {
+    const h = JSON.parse(e.data);
+    // сервер пересобран, а страница старая — перезагружаемся, чтобы у всех был один и тот же вид
+    if (h.build && pageBuild && h.build !== pageBuild) { location.reload(); return; }
+    pageBuild = h.build;
+    if (h.runoutPause) runoutPauseMs = h.runoutPause;
     clearLogs();
     for (const n of JSON.parse(e.data).history) addNote(n, true);
     renderGameLog();
@@ -218,11 +237,18 @@ function connect() {
     S = JSON.parse(e.data);
     deadline = performance.now() + S.turnLeft;
     tourDeadline = S.tour ? performance.now() + S.tour.levelLeft : 0;
+    streetReady = performance.now() + (S.streetIn || 0);
+    if (S.streetIn) setTimeout(() => { if (S) redrawFooter(); }, S.streetIn + 30);
     render();
     alignModals();
   });
   es.addEventListener('note', (e) => addNote(JSON.parse(e.data), false));
   es.addEventListener('react', (e) => showReaction(JSON.parse(e.data)));
+  es.addEventListener('say', (e) => { // «Покажи карты!» — облачко у того, кто попросил
+    const m = JSON.parse(e.data);
+    const v = seatPosOfPlayer(m.from);
+    if (v >= 0) { fxAt(v, 'bubble', m.text, 4000).classList.add('req'); SND.msg(); }
+  });
   es.addEventListener('kicked', () => showLogin('Админ удалил вас из игры.'));
   es.addEventListener('bye', () => showLogin(''));
   es.addEventListener('reset', () => { clearLogs(); prevHand = 0; prevBoard = 0; wonHand = 0; });
@@ -308,6 +334,17 @@ let runoutHand = 0;
 let runoutStep = 0;
 let runoutTimer = null;
 let runoutActive = false;
+let curStage = null;
+let heartTimer = null;
+let liveHeart = 0; // раздача, в которой уже бьётся сердце при олл-ине с открытием по кнопке дилера
+let streetReady = 0; // когда у дилера появится кнопка открыть улицу (пауза при олл-ине) // этап открытия карт, который сейчас на столе
+const allInSeen = new Map(); // раздача:игрок -> когда показали «Олл-ин!» (0 — без объявления)
+const allInAmt = new Map(); // раздача:игрок -> сумма олл-ина из записи хода
+const ALLIN_SAY = 3000; // сколько висит облачко «Олл-ин!»; потом аватарка краснеет
+let allInFirst = true;
+// Паузы докладки задаёт сервер (приходят в hello), здесь только запасные значения.
+let runoutPauseMs = { street: 2200, river: 3500 };
+const RUNOUT_PAUSE = (g) => (g && g.board === 4 ? runoutPauseMs.river : runoutPauseMs.street);
 
 function flyChips(v) {
   const colors = ['#ffd60a', '#ff453a', '#0a84ff'];
@@ -333,7 +370,52 @@ function cardHtml(c, cls, style) {
   return `<div class="card s-${c[1]} ${cls || ''}"${st}><b>${rank}</b><u>${suit}</u><i>${suit}</i></div>`;
 }
 
+// Стопка мини-карт: до восьми — рядом, больше — внахлёст веером (видны уголки со значением и мастью).
+function pileHtml(cards, hit) {
+  const tight = cards.length > 8 ? ' tight' : '';
+  return `<div class="pile${tight}">${cards.map((c) => cardHtml(c, 'xs' + (hit ? (c === hit ? ' hit' : ' miss') : ''))).join('')}</div>`;
+}
+// Отдельные подписи пишутся с заглавной; после «·» продолжение фразы — со строчной.
+const cap = (s) => s.replace(/^(<[^>]*>)?([а-яё])/, (m, tag, ch) => (tag || '') + ch.toUpperCase());
+const cardsWord = (n) => (n % 10 === 1 && n % 100 !== 11 ? 'карта' : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? 'карты' : 'карт');
+// Личная панель аутов при олл-ине: видит только сам игрок, пока ждёт следующую карту. Когда карта из набора
+// приходит, её мини-копия загорается — до конца раздачи.
+let myOuts = null; // { hand, board, cards } — последний показанный набор
+function outsDockHtml(stage) {
+  const me = S.you.seat;
+  if (me < 0) return '';
+  const cards = stage && stage.outs && stage.outs[me];
+  if (cards && cards.length) {
+    myOuts = { hand: S.handNo, board: stage.board, cards };
+    return `<div class="dock-cap">Вас спасут <b>${cards.length} ${cardsWord(cards.length)}</b></div>${pileHtml(cards)}`;
+  }
+  if (myOuts && myOuts.hand === S.handNo) {
+    const shown = stage ? stage.board : S.board.length;
+    const came = shown > myOuts.board ? S.board[myOuts.board] : null;
+    if (came && myOuts.cards.includes(came)) return `<div class="dock-cap hit">Пришла ваша карта</div>${pileHtml(myOuts.cards, came)}`;
+  }
+  return '';
+}
+
 // Победа: какие карты образуют комбинацию победителей (hit) и какие входят в их лучшую пятёрку (five).
+// Решил ли кикер: сравниваем победителя с лучшей рукой среди остальных вскрывшихся. Если они разошлись
+// уже на самой комбинации (две пары пятёрок и двоек против троек и двоек), кикер не играл — он бледный, как прочие.
+const CORE_LEN = [2, 2, 3, 2, 2, 6, 3, 2, 2]; // сколько первых чисел оценки — сама комбинация, остальное — кикеры
+function kickersMatter(res, w) {
+  const me = res.hands[w] && res.hands[w].score;
+  if (!me) return true;
+  let best = null;
+  for (const i in res.hands) {
+    if (Number(i) === Number(w) || winnersOf(res).has(Number(i))) continue;
+    const sc = res.hands[i].score;
+    if (!best || cmpScore(sc, best) > 0) best = sc;
+  }
+  if (!best) return false; // соперников на вскрытии нет — кикер ничего не решал
+  let k = 0;
+  while (k < me.length && me[k] === best[k]) k++;
+  return k >= CORE_LEN[me[0]];
+}
+const cmpScore = (a, b) => { for (let k = 0; k < Math.max(a.length, b.length); k++) { const d = (a[k] || 0) - (b[k] || 0); if (d) return d; } return 0; };
 function winCards(res, winners) {
   const hit = new Set();
   const five = new Set();
@@ -342,7 +424,7 @@ function winCards(res, winners) {
       const h = res.hands[i];
       if (!h || !h.core) continue;
       h.core.forEach((c) => hit.add(c));
-      h.five.forEach((c) => five.add(c));
+      if (kickersMatter(res, i)) h.five.forEach((c) => five.add(c)); // кикер светлый, только если решил исход
     }
   }
   return { hit, five, on: hit.size > 0 };
@@ -406,21 +488,69 @@ function render() {
   document.body.dataset.cards = S.look.cards;
   const me = S.you.seat;
   const newHand = S.handNo !== prevHand;
-  if (newHand) clearInterval(runoutTimer);
-  const ro = S.phase === 'idle' && S.result && S.result.runout;
+  if (newHand) { clearTimeout(runoutTimer); clearTimeout(heartTimer); combosOpen = false; } // справочник в новой раздаче снова свёрнут
+  // live — улицы уже открывал дилер, повторять не надо
+  const ro = S.phase === 'idle' && S.result && S.result.runout && !S.result.runout.live ? S.result.runout : null;
   if (ro && runoutHand !== S.handNo) {
     runoutHand = S.handNo;
     runoutStep = 0;
-    clearInterval(runoutTimer);
-    runoutTimer = setInterval(() => {
-      runoutStep++;
-      if (runoutStep >= ro.stages.length) clearInterval(runoutTimer);
-      if (S) render();
-    }, 1500);
+    clearTimeout(runoutTimer);
+    // этапы держатся по-разному: перед ривером пауза длиннее и бьётся «сердце»
+    // сердце бьётся от вскрытия до последней карты и учащается перед ривером
+    const hand = S.handNo;
+    const beat = () => {
+      if (runoutHand !== hand || runoutStep >= ro.stages.length) return;
+      SND.heartbeat();
+      const g = ro.stages[runoutStep];
+      heartTimer = setTimeout(beat, g && g.board === 4 ? 720 : 1050);
+    };
+    const next = () => {
+      const g = ro.stages[runoutStep];
+      runoutTimer = setTimeout(() => {
+        runoutStep++;
+        if (S) render();
+        if (runoutStep < ro.stages.length) next(); else clearTimeout(heartTimer);
+      }, RUNOUT_PAUSE(g));
+    };
+    next();
+    // сердце начинает биться, когда отзвучало последнее «Олл-ин!»
+    const said = Math.max(0, ...[...allInSeen].filter(([k]) => k.startsWith(hand + ':')).map(([, v]) => v));
+    heartTimer = setTimeout(beat, Math.max(0, said + ALLIN_SAY - performance.now()));
   }
-  const stage = ro && runoutHand === S.handNo && runoutStep < ro.stages.length ? ro.stages[runoutStep] : null;
+  const stage = S.runoutLive || (ro && runoutHand === S.handNo && runoutStep < ro.stages.length ? ro.stages[runoutStep] : null);
+  // олл-ин, улицы открывает дилер: сердце бьётся, пока не откроется ривер (начинает после «Олл-ин!»)
+  if (S.runoutLive && liveHeart !== S.handNo) {
+    liveHeart = S.handNo;
+    const hand = S.handNo;
+    const said = Math.max(0, ...[...allInSeen].filter(([k]) => k.startsWith(hand + ':')).map(([, v]) => v));
+    const beat = () => {
+      if (!S || S.handNo !== hand || !S.runoutLive) return;
+      SND.heartbeat();
+      heartTimer = setTimeout(beat, S.runoutLive.board === 4 ? 720 : 1050);
+    };
+    clearTimeout(heartTimer);
+    heartTimer = setTimeout(beat, Math.max(0, said + ALLIN_SAY - performance.now()));
+  }
   runoutActive = !!stage;
+  curStage = stage;
   const winners = stage ? new Set() : winnersOf(S.result); // победителя показываем, когда открыты все карты
+  // Олл-ин: сначала игрок «говорит» — красное облачко «Олл-ин!» и тяжёлый звук, а когда облачко уходит,
+  // аватарка становится красной с полосой «олл-ин». Один раз на игрока за раздачу.
+  // Последний, кто ответил олл-ином, сразу закрывает торговлю — поэтому смотрим и на открытие карт после неё.
+  if (S.phase !== 'idle' || (S.result && S.result.runout)) {
+    for (let i = 0; i < 6; i++) {
+      const s = S.seats[i];
+      if (!s || !s.allIn || !s.inHand || s.folded) continue;
+      const key = S.handNo + ':' + s.id;
+      if (allInSeen.has(key)) continue;
+      if (allInFirst) { allInSeen.set(key, 0); continue; } // открыли страницу посреди раздачи — сразу красная, без объявления
+      allInSeen.set(key, performance.now());
+      fxAt(viewPos(i), 'bubble', allInAmt.has(key) ? 'Олл-ин ' + fmt(allInAmt.get(key)) : 'Олл-ин!', ALLIN_SAY).classList.add('allin');
+      SND.allin();
+      setTimeout(() => { if (S) render(); }, ALLIN_SAY + 30);
+    }
+  }
+  allInFirst = false;
   $('info').textContent = infoText();
 
   const win = winCards(S.result, winners);
@@ -439,16 +569,21 @@ function render() {
     const s = S.seats[i];
     const v = viewPos(i);
     if (!s) {
-      html += `<div class="seat empty" style="${place(POS[v])}"><div class="av">свободно</div>${me < 0 && !tourOn() ? '<button data-cmd="sit">Сесть</button>' : ''}</div>`;
+      html += `<div class="seat empty" style="${place(POS[v])}"><div class="av">Свободно</div>${me < 0 && !tourOn() ? '<button data-cmd="sit">Сесть</button>' : ''}</div>`;
       continue;
     }
     const cls = ['seat'];
     if (i === me) cls.push('me');
     if (S.toAct === i) cls.push('turn');
     if (s.inHand && s.folded) cls.push('folded');
+    if (s.showed) cls.push('showed');
     if (s.sittingOut || (!s.inHand && S.phase !== 'idle')) cls.push('out');
     if (!s.connected) cls.push('offline');
     if (winners.has(i)) cls.push('win');
+    if (stage && stage.eq[i] == null) cls.push('dark'); // открытие карт при олл-ине: свет только на участниках
+    const said = allInSeen.get(S.handNo + ':' + s.id);
+    const allIn = s.allIn && s.inHand && !s.folded && (S.phase !== 'idle' || !!stage) && !(said && performance.now() - said < ALLIN_SAY);
+    if (allIn) cls.push('allin');
     const isDealer = S.waitDealer && i === S.dealerSeat; // ждём, когда дилер начнёт новую раздачу
     if (isDealer) cls.push('dealer-wait');
     let hole = '';
@@ -462,30 +597,34 @@ function render() {
       hole = `<div class="hole ${side}">${cards}</div>`;
     }
     let line = `<div class="st">${fmt(s.stack)}</div>`;
-    if (s.sittingOut) line = '<div class="st note">пропускает</div>';
-    else if (s.allIn && S.phase !== 'idle') line = '<div class="st">олл-ин</div>';
-    else if (s.inHand && s.folded && S.phase !== 'idle') line = `<div class="st note">фолд · ${fmt(s.stack)}</div>`;
-    else if (tourOn() && s.stack === 0 && S.phase === 'idle') line = '<div class="st note">выбыл</div>';
-    let hand = S.result && !stage && S.result.hands[i] ? `<div class="hand">${S.result.hands[i].name}</div>` : '';
+    if (s.sittingOut) line = '<div class="st note">Пропускает</div>';
+    else if (s.allIn && S.phase !== 'idle') line = '<div class="st">Олл-ин</div>';
+    else if (s.inHand && s.folded && S.phase !== 'idle') line = `<div class="st note">Фолд · ${fmt(s.stack)}</div>`;
+    else if (tourOn() && s.stack === 0 && S.phase === 'idle') line = '<div class="st note">Выбыл</div>';
+    if (stage && stage.eq[i] != null) line = '<div class="st">Олл-ин</div>'; // пока открываются карты, итог не подсказываем
+    let hand = S.result && !stage && S.result.hands[i] ? `<div class="hand">${cap(S.result.hands[i].name)}</div>` : '';
     if (stage && stage.eq[i] != null) {
       const lead = Math.max(...Object.values(stage.eq));
-      hand = `<div class="odds${stage.eq[i] === lead ? ' lead' : ''}">${stage.eq[i]}%</div>`;
+      hand = ''; // шансы и ауты — в панели «Комбинации», на столе только игра
     }
     if (tourPhase() === 'done') {
       const pl = tourPlace(s.id); // итоги турнира: место под каждым игроком
-      hand = pl ? `<div class="hand${pl.place === 1 ? '' : ' wait'}">${pl.place === 1 ? 'победитель' : pl.place + ' место'}</div>` : '';
+      hand = pl ? `<div class="hand${pl.place === 1 ? '' : ' wait'}">${pl.place === 1 ? 'Победитель' : pl.place + ' место'}</div>` : '';
     } else if (!S.running) {
       const host = S.people.some((p) => p.id === s.id && p.isHost); // админу отмечать готовность не нужно: он запускает игру
-      hand = s.ready ? '<div class="hand ok">готов</div>' : `<div class="hand wait">${host ? 'админ' : 'не готов'}</div>`;
+      hand = s.ready ? '<div class="hand ok">Готов</div>' : `<div class="hand wait">${host ? 'Админ' : 'Не готов'}</div>`;
     }
-    if (isDealer && i !== me) hand += '<div class="hand dl">дилер</div>';
+    if (isDealer && i !== me) hand += '<div class="hand dl">Дилер</div>';
     html += `<div class="${cls.join(' ')}" style="${place(POS[v])}">${hole}
-      <div class="av"><svg class="ring" viewBox="0 0 82 82"><circle class="track" cx="41" cy="41" r="37"/><circle class="prog" cx="41" cy="41" r="37" stroke-dasharray="${RING}"/></svg><span class="face">${avatarHtml(s.avatar)}${s.connected ? '' : '<span class="off-band">офлайн</span>'}</span>${i === me ? REACT_BTN : ''}${blindBadge(i, v, i === me)}${winChip(s.cups, i !== me && v < 4)}</div>
+      <div class="av"><svg class="ring" viewBox="0 0 82 82"><circle class="track" cx="41" cy="41" r="37"/><circle class="prog" cx="41" cy="41" r="37" stroke-dasharray="${RING}"/></svg><span class="face">${avatarHtml(s.avatar)}${allIn ? '<span class="off-band ai">Олл-ин</span>' : s.connected ? '' : '<span class="off-band">Не в сети</span>'}</span>${i === me ? REACT_BTN : ''}${blindBadge(i, v, i === me)}${winChip(s.cups, i !== me && v < 4)}</div>
       <div class="plate"><div class="nm">${esc(s.name)}</div>${line}</div>${hand}</div>`;
-    if (s.bet > 0) html += `<div class="bet" style="${place(BET[v])}">${fmt(s.bet)}</div>`;
-    if (i === S.button && S.handNo) html += `<div class="dealer" style="${place(DEALER[v])}" title="Дилер">D</div>`;
+    if (s.bet > 0) html += `<div class="bet${BET_EDGE[v] || ''}" style="${place(BET[v])}">${fmt(s.bet)}</div>`;
+    // раздача кончилась и ждём дилера — фишка D уже у того, кто начнёт следующую (вместе с подписью «Дилер»)
+    const dSeat = S.waitDealer && S.dealerSeat >= 0 ? S.dealerSeat : S.button;
+    if (i === dSeat && S.handNo) html += `<div class="dealer" style="${place(DEALER[v])}" title="Дилер">D</div>`;
   }
   $('seats').innerHTML = html;
+  $('table').classList.toggle('spot', !!stage); // свет на участниках олл-ина и общих картах
 
   $('pot').innerHTML = `<div class="potrow">${S.pot > 0 ? potHtml(S.pot) : ''}${tclockHtml()}</div>`;
   tclockTick();
@@ -496,13 +635,15 @@ function render() {
   const slot = (k) => {
     const c = k < shown ? S.board[k] : null;
     if (!c && rest && rest[k - S.board.length]) return cardHtml(rest[k - S.board.length], 'ghost' + (k >= prevBoard ? ' flip' : ''), `animation-delay:${(k - prevBoard) * 110 + 600}ms`);
-    if (!c) return '<div class="slot"></div>';
+    const nextSlot = S.waitStreet ? (S.board.length === 0 ? k < 3 : k === S.board.length) : stage && stage.board === 4 && k === 4;
+    if (!c) return `<div class="slot${nextSlot ? ' next' : ''}"></div>`; // место под следующую карту пульсирует
     return cardHtml(c, (k >= prevBoard ? 'flip' : '') + winClass(c, win), k >= prevBoard ? `animation-delay:${(k - prevBoard) * 110}ms` : '');
   };
   $('board').innerHTML = `<div class="grp">${slot(0)}${slot(1)}${slot(2)}</div><div class="grp">${slot(3)}</div><div class="grp">${slot(4)}</div>`;
   $('board').hidden = !S.handNo || (!S.running && !S.result); // пока игра не идёт, в центре только кнопки готовности и старта
   prevBoard = rest ? 5 : shown;
   prevHand = S.handNo;
+
 
   // Победа: один раз за раздачу фишки из банка летят к победителям.
   if (S.result && S.phase === 'idle' && !stage && wonHand !== S.handNo) {
@@ -568,15 +709,16 @@ function renderFooter() {
   const s = me >= 0 ? S.seats[me] : null;
   const L = S.legal;
   const free = S.seats.some((x) => !x);
-  const key = JSON.stringify([me, S.toAct, S.handNo, S.phase, L, S.pot, S.paused, s && [s.stack, s.sittingOut, s.inHand], prefs.unit, prefs.betUnit, S.cfg.bb, free, raiseOpen, S.rules, S.rebuyReqs, s && s.buyins, S.waitDealer, S.dealerSeat, tourPhase(), S.tour && S.tour.answers, S.tour && S.tour.places]);
+  const key = JSON.stringify([me, S.toAct, S.handNo, S.phase, L, S.pot, S.paused, s && [s.stack, s.sittingOut, s.inHand], prefs.unit, prefs.betUnit, S.cfg.bb, free, raiseOpen, S.rules, S.rebuyReqs, s && s.buyins, S.waitDealer, S.dealerSeat, tourPhase(), S.tour && S.tour.answers, S.tour && S.tour.places, S.askedShow, s && s.showed, runoutActive, runoutStep, S.board.length, S.waitStreet, S.button, S.autoDeal, performance.now() >= streetReady]);
   if (key === footerKey) return;
   footerKey = key;
   const f = $('actions');
   // Тихая панель: подпись (без точки в конце) по центру над кнопкой; без кнопки — просто строка подсказки.
+  const top = ''; // ауты при олл-ине — в «Комбинациях», не на столе
   const quiet = (text, buttons) => {
     f.innerHTML = buttons
-      ? `<div class="dock quiet"><div class="dock-cap">${text}</div><div class="row">${buttons}</div></div>`
-      : `<div class="dock quiet"><div class="row">${text ? `<span class="hint">${text}</span>` : ''}</div></div>`;
+      ? `<div class="dock quiet">${top}${text ? `<div class="dock-cap">${text}</div>` : ''}<div class="row">${buttons}</div></div>`
+      : `<div class="dock quiet">${top}${top && !text ? '' : `<div class="row">${text ? `<span class="hint">${text}</span>` : ''}</div>`}</div>`;
   };
   // кто нажал «Не сейчас», может передумать, пока турнир собирается
   const mine = myTourAnswer();
@@ -590,36 +732,45 @@ function renderFooter() {
     else quiet('Вы наблюдаете за игрой · свободных мест нет');
     return;
   }
+  // круг торговли закончен — следующую улицу открывает дилер (при олл-ине кнопка появляется после паузы)
+  if (S.waitStreet && !S.autoDeal) {
+    const street = S.board.length === 0 ? 'флоп' : S.board.length === 3 ? 'тёрн' : 'ривер';
+    if (me !== S.button) { quiet(runoutActive ? '' : 'Ждём дилера'); return; }
+    if (performance.now() < streetReady) { quiet(''); return; }
+    quiet('Вы дилер', `<button class="primary large deal-go" data-cmd="street">Открыть ${street}</button>`);
+    return;
+  }
+  if (runoutActive) { quiet(''); return; } // пока открываются карты олл-ина — ни докупки, ни «Вы выбыли»: не подсказываем итог
   if (L && !S.paused) {
     const tk = `${S.handNo}:${S.phase}:${S.currentBet}`;
     if (tk !== turnKey) { turnKey = tk; raiseTo = L.minTo; raiseOpen = false; }
     raiseTo = Math.min(L.maxTo, Math.max(L.minTo, raiseTo));
     const sizable = L.canRaise && L.minTo < L.maxTo;
     if (raiseOpen && sizable) {
-      f.innerHTML = `<div class="dock">
-        <div class="sizing">
-          <button class="icon" data-raise="close" title="Назад">${ICON.back}</button>
-          <div class="seg wide"><button data-size="min">Мин</button><button data-size="0.3333">⅓</button><button data-size="0.5">½</button><button data-size="1">Банк</button><button data-size="max">Олл-ин</button></div>
-          <div class="field"><input id="raiseInput" inputmode="decimal" autocomplete="off"><button id="unitBtn" title="В чём вводить ставку">${prefs.betUnit === 'bb' ? 'ББ' : 'фишки'}</button></div>
-        </div>
-        <div class="acts"><button class="step" data-step="-1" title="Меньше на один блайнд">−</button><button class="primary" id="raiseBtn" data-act="raise"></button><button class="step" data-step="1" title="Больше на один блайнд">+</button></div>
-      </div>`;
+      f.innerHTML = raiseDockHtml(L);
       syncRaise();
       return;
     }
     raiseOpen = false;
     const call = L.canCheck
       ? '<button data-act="check">Чек</button>'
-      : `<button data-act="call">${L.toCall >= s.stack ? 'Олл-ин' : 'Колл'}<span>${fmt(L.toCall)}</span></button>`;
+      : L.toCall >= s.stack
+        ? `<button class="allin-call" data-act="call">Колл · олл-ин<span>${fmt(L.toCall)}</span></button>` // своим цветом: не обычный колл и не красный «Фолд»
+        : `<button data-act="call">Колл<span>${fmt(L.toCall)}</span></button>`;
     let raise = '';
     if (sizable) raise = `<button class="primary" data-raise="open">${S.currentBet ? 'Рейз' : 'Ставка'}</button>`;
     else if (L.canRaise) raise = `<button class="primary" data-act="raise">Олл-ин<span>${fmt(L.maxTo)}</span></button>`;
     f.innerHTML = `<div class="dock"><div class="acts"><button class="danger" data-act="fold">Фолд</button>${call}${raise}</div></div>`;
     return;
   }
-  if (S.waitDealer && S.dealerSeat === me) {
+  // После раздачи: сбросивший может показать свои карты, победитель — попросить показать.
+  const res = S.phase === 'idle' && !runoutActive ? S.result : null;
+  let after = '';
+  if (res && s.inHand && s.folded && !s.showed) after += '<button class="large" data-cmd="showCards">Показать карты</button>';
+  if (res && res.payouts[me] > 0 && !S.askedShow && S.seats.some((x, k) => x && k !== me && x.inHand && x.folded && !x.showed)) after += '<button class="large" data-cmd="askShow">Попросить показать</button>';
+  if (S.waitDealer && S.dealerSeat === me && !runoutActive) { // пока открываются карты олл-ина, кнопки нет
     // дилеру — кнопка новой раздачи на месте кнопок хода; стол и борд остаются открытыми для обсуждения
-    quiet('Вы дилер', '<button class="primary large" data-cmd="deal">Новая раздача</button>');
+    quiet('Вы дилер', after + '<button class="primary large deal-go" data-cmd="deal">Новая раздача</button>');
     return;
   }
   if (tourOn() && s.stack === 0 && !(s.inHand && S.phase !== 'idle')) {
@@ -638,16 +789,49 @@ function renderFooter() {
     else quiet('Фишки закончились', `<button class="primary large" data-cmd="rebuyRequest">Попросить докупку ${fmt(S.cfg.startStack)}</button>`);
   }
   else if (S.toAct >= 0 && S.seats[S.toAct]) quiet(`Ходит ${esc(S.seats[S.toAct].name)}`);
+  else if (after) quiet('Раздача окончена', after);
   else quiet('');
 }
 
+// Меню рейза: крупно сумма (под ней ББ и доля банка), ползунок от минимума до олл-ина с шагом в малый блайнд,
+// под ним подписи быстрых размеров — нажатие ставит ровно эту сумму, а при перетаскивании ползунок к ним «прилипает».
+// Сумма — только на синей кнопке; справа, симметрично «Отмене», — она же в ББ: нажал — ввод в ББ.
+function raisePresets(L) {
+  const pot = S.pot + L.toCall; // банк после уравнивания
+  const clamp = (v) => Math.min(L.maxTo, Math.max(L.minTo, Math.round(v)));
+  const list = [
+    { k: 'min', label: 'Мин', name: 'минимум', v: L.minTo },
+    { k: 'third', label: '⅓', name: 'треть банка', v: clamp(S.currentBet + pot / 3) },
+    { k: 'half', label: '½', name: 'полбанка', v: clamp(S.currentBet + pot / 2) },
+    { k: 'pot', label: 'Банк', name: 'банк', v: clamp(S.currentBet + pot) },
+    { k: 'max', label: 'Олл-ин', name: 'олл-ин', v: L.maxTo },
+  ];
+  // доли банка, упёршиеся в минимум или олл-ин, не показываем — они совпали бы с краями
+  return list.filter((p) => p.k === 'min' || p.k === 'max' || (p.v > L.minTo && p.v < L.maxTo));
+}
+function raiseDockHtml(L) {
+  const ps = raisePresets(L);
+  const marks = ps.map((p) => `<button data-size="${p.k}">${p.label}</button>`).join('');
+  return `<div class="dock raise">
+    <div class="rslider"><input type="range" id="raiseRange" min="${L.minTo}" max="${L.maxTo}" step="any" value="${raiseTo}"></div>
+    <div class="rmarks">${marks}</div>
+    <div class="acts"><button class="cancel" data-raise="close">Отмена</button><button class="primary" id="raiseBtn" data-act="raise"></button><button class="rbb" id="raiseBB" title="Ввести сумму в больших блайндах"></button><input id="raiseInput" class="rbb" inputmode="decimal" autocomplete="off" hidden></div>
+  </div>`;
+}
 function syncRaise(from) {
   const L = S.legal;
   if (!L) return;
   const btn = $('raiseBtn');
   if (btn) btn.innerHTML = `${raiseTo >= L.maxTo ? 'Олл-ин' : (S.currentBet ? 'Рейз до' : 'Ставка')}<span>${fmt(raiseTo)}</span>`;
-  const inp = $('raiseInput');
-  if (inp && from !== 'input') inp.value = prefs.betUnit === 'bb' ? String(+(raiseTo / S.cfg.bb).toFixed(1)).replace('.', ',') : raiseTo;
+  const bbBtn = $('raiseBB');
+  if (bbBtn) {
+    bbBtn.innerHTML = `${String(+(raiseTo / S.cfg.bb).toFixed(1)).replace('.', ',')} <span>ББ</span>`;
+    const ps = raisePresets(L);
+    for (const m of document.querySelectorAll('.rmarks button')) { const q = ps.find((x) => x.k === m.dataset.size); m.classList.toggle('on', !!q && q.v === raiseTo); }
+  }
+  const range = $('raiseRange');
+  if (range && from !== 'range') range.value = raiseTo;
+  if (range) range.style.setProperty('--p', (((raiseTo - L.minTo) / Math.max(1, L.maxTo - L.minTo)) * 100).toFixed(2) + '%');
 }
 function setRaise(v, from) {
   const L = S.legal;
@@ -665,39 +849,48 @@ $('actions').addEventListener('click', (e) => {
     cmd('act', { action: b.dataset.act, amount: raiseTo });
   } else if (b.dataset.raise) {
     raiseOpen = b.dataset.raise === 'open';
+    if (raiseOpen && L) raiseTo = Math.min(L.maxTo, Math.max(L.minTo, 3 * S.cfg.bb)); // по умолчанию 3 ББ
     redrawFooter();
   } else if (b.dataset.size && L) {
-    if (b.dataset.size === 'min') setRaise(L.minTo);
-    else if (b.dataset.size === 'max') setRaise(L.maxTo);
-    else setRaise(S.currentBet + Number(b.dataset.size) * (S.pot + L.toCall)); // доля банка после уравнивания
-  } else if (b.id === 'unitBtn') {
-    prefs.betUnit = prefs.betUnit === 'bb' ? 'chips' : 'bb';
-    savePrefs();
-    b.textContent = prefs.betUnit === 'bb' ? 'ББ' : 'фишки';
-    syncRaise();
+    const p = raisePresets(L).find((x) => x.k === b.dataset.size);
+    if (p) setRaise(p.v); // ровно эта сумма
+  } else if (b.id === 'raiseBB') {
+    const inp = $('raiseInput');
+    b.hidden = true; inp.hidden = false; inp.value = String(+(raiseTo / S.cfg.bb).toFixed(1)).replace('.', ','); inp.focus(); inp.select();
   }
 });
+// ползунок: шаг — малый блайнд от минимума, у края — ровно олл-ин, возле быстрых размеров — прилипает к ним
 $('actions').addEventListener('input', (e) => {
-  if (e.target.id !== 'raiseInput') return;
-  const v = Number(String(e.target.value).replace(',', '.').replace(/\s/g, ''));
-  setRaise(prefs.betUnit === 'bb' ? v * S.cfg.bb : v, 'input');
+  if (e.target.id !== 'raiseRange' || !S.legal) return;
+  const L = S.legal;
+  const raw = Number(e.target.value);
+  const sb = S.cfg.sb || Math.max(1, S.cfg.bb / 2);
+  let v = raw >= L.maxTo - sb / 2 ? L.maxTo : L.minTo + Math.round((raw - L.minTo) / sb) * sb;
+  const near = raisePresets(L).find((p) => Math.abs(raw - p.v) < (L.maxTo - L.minTo) * 0.025);
+  if (near) v = near.v;
+  setRaise(v, 'range');
 });
-$('actions').addEventListener('change', (e) => { if (e.target.id === 'raiseInput') syncRaise(); });
-$('actions').addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.id === 'raiseInput') { syncRaise(); cmd('act', { action: 'raise', amount: raiseTo }); } });
-
-// «−» и «+»: шаг в один большой блайнд; при удержании шаги повторяются.
-let stepTimer = null;
-function stopStep() { clearTimeout(stepTimer); clearInterval(stepTimer); stepTimer = null; }
-$('actions').addEventListener('pointerdown', (e) => {
-  const b = e.target.closest('[data-step]');
-  if (!b || !S || !S.legal) return;
-  const d = Number(b.dataset.step) * S.cfg.bb;
-  stopStep();
-  setRaise(raiseTo + d);
-  stepTimer = setTimeout(() => { stepTimer = setInterval(() => setRaise(raiseTo + d), 70); }, 350);
+// ввод суммы в ББ (2,5 → 2,5 ББ); Enter — применить, Esc — отменить
+function applyRaiseInput(ok) {
+  const inp = $('raiseInput');
+  if (!inp || inp.hidden) return;
+  const n = Number(String(inp.value).replace(',', '.').replace(/\s/g, ''));
+  if (ok && Number.isFinite(n) && n > 0) setRaise(n * S.cfg.bb);
+  inp.hidden = true;
+  $('raiseBB').hidden = false;
+  syncRaise();
+}
+$('actions').addEventListener('keydown', (e) => {
+  if (e.target.id === 'raiseInput') {
+    if (e.key === 'Enter') applyRaiseInput(true);
+    else if (e.key === 'Escape') { e.stopPropagation(); applyRaiseInput(false); }
+  } else if (e.target.id === 'raiseRange' && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+    e.preventDefault(); // стрелки — ровно на малый блайнд
+    const sb = S.cfg.sb || Math.max(1, S.cfg.bb / 2);
+    setRaise(e.key === 'ArrowRight' ? Math.min(S.legal.maxTo, raiseTo + sb) : raiseTo - sb);
+  }
 });
-document.addEventListener('pointerup', stopStep);
-document.addEventListener('pointercancel', stopStep);
+$('actions').addEventListener('focusout', (e) => { if (e.target.id === 'raiseInput') applyRaiseInput(true); });
 
 // Кнопки с data-cmd работают в любом месте страницы.
 document.addEventListener('click', (e) => {
@@ -819,7 +1012,7 @@ function renderTour() {
   } else {
     const places = t.places.slice().sort((a, b) => a.place - b.place);
     h = `${chip('glow')}<h2 class="solo">Турнир окончен</h2>
-      <div class="group">${places.map((p) => tourRow(p, `<span class="tst${p.place === 1 ? ' gold' : ''}">${p.place === 1 ? 'победитель' : p.place + ' место'}</span>`, p.place)).join('')}</div>
+      <div class="group">${places.map((p) => tourRow(p, `<span class="tst${p.place === 1 ? ' gold' : ''}">${p.place === 1 ? 'Победитель' : p.place + ' место'}</span>`, p.place)).join('')}</div>
       <div class="acts">${S.you.isHost
         ? '<button data-cmd="tourEnd">Вернуться к игре</button><button class="primary" data-cmd="tourGather">Новый турнир</button>'
         : `<button class="primary" data-tourclose="${t.id}">Закрыть</button>`}</div>`;
@@ -891,12 +1084,12 @@ function fxAt(v, cls, content, ms) {
   if (cls === 'bubble' && v === 0) {
     // своё место: облачко справа от аватарки (слева на ней кнопка реакций, сверху карты)
     el.className += ' side-right';
-    el.style.left = `calc(${POS[v][0]}% + 46px)`;
+    el.style.left = `calc(${POS[v][0]}% + 62px)`; // правее значка блайнда (он висит у аватарки на 20 px наружу)
     el.style.top = `calc(${POS[v][1]}% + 22px)`;
   } else if (cls === 'bubble' && v === 3) {
     // верхнее место: облачко слева от аватарки (справа карты, сверху край экрана)
     el.className += ' side-left';
-    el.style.left = `calc(${POS[v][0]}% - 46px)`;
+    el.style.left = `calc(${POS[v][0]}% - 62px)`; // левее значка блайнда
     el.style.top = `calc(${POS[v][1]}% - 20px)`;
   } else {
     el.style.left = POS[v][0] + '%';
@@ -906,7 +1099,17 @@ function fxAt(v, cls, content, ms) {
   if (cls === 'bubble') for (const old of $('fx').querySelectorAll(`.bubble[data-v="${v}"]`)) old.remove();
   el.dataset.v = v;
   $('fx').appendChild(el);
+  if (cls === 'bubble') {
+    // длинное облачко у верхних мест не должно уходить под шапку и закрывать её значки
+    const head = document.querySelector('header');
+    const over = head ? head.getBoundingClientRect().bottom + 8 - el.getBoundingClientRect().top : 0;
+    if (over > 0) {
+      const k = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--k')) || 1;
+      el.style.top = `calc(${el.style.top.replace(/^calc\((.*)\)$/, '$1')} + ${Math.ceil(over / k)}px)`;
+    }
+  }
   setTimeout(() => el.remove(), ms);
+  return el;
 }
 function showReaction(r) {
   if (!Object.prototype.hasOwnProperty.call(REACTIONS, r.emoji)) return;
@@ -931,7 +1134,7 @@ function pColor(pid) {
 }
 function moveText(n) {
   const amt = n.amount ? ' ' + fmt(n.amount) : '';
-  const words = { sb: 'малый блайнд', bb: 'большой блайнд', fold: 'фолд', check: 'чек', call: 'колл', bet: 'ставка', raise: 'рейз до' };
+  const words = { sb: 'Малый блайнд', bb: 'Большой блайнд', fold: 'Фолд', check: 'Чек', call: 'Колл', bet: 'Ставка', raise: 'Рейз до' };
   return (words[n.move || n.act] || n.text) + amt;
 }
 function renderGameLog() {
@@ -948,7 +1151,7 @@ function renderGameLog() {
     if (logPlayer && n.pid !== logPlayer) continue;
     const style = `style="--pc:${pColor(n.pid)}"`;
     if (n.act === 'show') {
-      h += `<div class="la show" ${style}><i></i><b>${esc(n.name)}</b><span class="mv">показал</span><span class="cc">${n.cards.map((c) => cardHtml(c, 'xs')).join('')}</span><span class="hn">${n.handName}</span></div>`;
+      h += `<div class="la show" ${style}><i></i><b>${esc(n.name)}</b><span class="mv">Показал</span><span class="cc">${n.cards.map((c) => cardHtml(c, 'xs')).join('')}</span><span class="hn">${n.handName}</span></div>`;
       continue;
     }
     const mv = n.move || n.act;
@@ -973,6 +1176,15 @@ function addNote(n, silent) {
     }
     if (!silent && n.act && SND[n.act]) SND[n.act]();
     if (!silent && n.act === 'level') levelBanner(n);
+    // Реплика игрока на ход — как будто он сказал это вслух. Все системные облачка синие, белые — только чат;
+    // олл-ин объявляется своим красным облачком; фолд — без облачка.
+    if ((n.act === 'call' || n.act === 'raise') && n.allIn && n.amount) allInAmt.set(n.hand + ':' + n.pid, n.amount); // для облачка «Олл-ин 1 250»
+    if (!silent && (n.act === 'check' || n.act === 'call' || n.act === 'raise') && !n.allIn) {
+      const v = seatPosOfPlayer(n.pid);
+      const amt = n.amount ? ' ' + fmt(n.amount) : '';
+      const say = { check: 'Чек', call: 'Колл' + amt, bet: 'Ставка' + amt, raise: 'Рейз до' + amt }[n.move || n.act];
+      if (v >= 0 && say) fxAt(v, 'bubble', say, 1800).classList.add('act'); // синие, как все системные: белые — только чат
+    }
     return;
   }
   const p = document.createElement('div');
@@ -1056,7 +1268,7 @@ function renderProfile(force) {
   if (!rxEdit) {
     h += `<div class="group"><div class="line"><div class="rx-row grow">${prefs.reactions.map((id) => `<span title="${REACTIONS[id][0]}">${reactionSvg(id)}</span>`).join('')}</div><button data-prof="rx">Изменить</button></div></div>`;
   } else {
-    h += '<div class="rx-pick">' + Object.keys(REACTIONS).map((id) => `<button data-rx="${id}"${on(prefs.reactions.includes(id))} title="${REACTIONS[id][0]}">${reactionSvg(id)}</button>`).join('') + '</div>';
+    h += '<div class="rx-pick">' + Object.keys(REACTIONS).map((id) => { const k = prefs.reactions.indexOf(id); return `<button data-rx="${id}"${on(k >= 0)} title="${REACTIONS[id][0]}">${reactionSvg(id)}${k >= 0 ? `<b class="rx-n">${k + 1}</b>` : ''}</button>`; }).join('') + '</div>';
     h += `<div class="acts prof-acts"><button class="primary" data-prof="rxdone">Готово · ${prefs.reactions.length} из 6</button></div>`;
   }
   h += '<span class="caption">На вашем экране</span><div class="group">';
@@ -1085,7 +1297,7 @@ $('profile').addEventListener('click', async (e) => {
     if (has && prefs.reactions.length === 1) { toast('Нужна хотя бы одна реакция'); return; }
     if (!has && prefs.reactions.length >= 6) { toast('Можно выбрать шесть — сначала снимите одну'); return; }
     const next = has ? prefs.reactions.filter((x) => x !== id) : prefs.reactions.concat(id);
-    prefs.reactions = Object.keys(REACTIONS).filter((x) => next.includes(x)); // порядок как в наборе
+    prefs.reactions = next; // порядок выбора = порядок на дуге слева направо
     savePrefs();
     renderReactPop();
     renderProfile(true);
@@ -1113,7 +1325,9 @@ function playersHtml() {
   const tour = tourOn();
   // в турнире выбывшие идут отдельной группой со своими местами
   const out = tour ? S.tour.places.filter((p) => !S.seats.some((x) => x && x.id === p.id)).sort((a, b) => a.place - b.place) : [];
-  const watching = S.people.filter((p) => !p.seated && !out.some((o) => o.id === p.id));
+  const away = S.people.filter((p) => !p.seated && !out.some((o) => o.id === p.id));
+  const watching = away.filter((p) => p.connected);
+  const offline = away.filter((p) => !p.connected); // ушли, но помнятся: вернутся под своим ником со своими фишками
   const kick = (p) => (S.you.isHost && p.id !== S.you.id
     ? `<button class="icon pm" data-pmenu="${p.id}" title="Убрать игрока">${ICON.close}</button>`
     : S.you.isHost ? '<span class="icon-ph"></span>' : ''); // у админа своя строка без «⋯», но колонка стека стоит ровно
@@ -1124,6 +1338,11 @@ function playersHtml() {
     for (const p of seated) {
       const net = p.net; // считает сервер: фишки на руках и в текущем банке минус всё полученное
       const notes = [];
+      const hidden = runoutActive && curStage && curStage.eq[S.seats.indexOf(p)] != null; // пока открываются карты олл-ина — итог не подсказываем
+      if (hidden) {
+        h += `<div class="line prow${p.id === S.you.id ? ' me' : ''}"><span class="num">${seated.indexOf(p) + 1}</span><span class="pav">${avatarHtml(p.avatar)}</span><div class="grow"><div class="pn">${esc(p.name)}${p.id === S.you.id ? ' (вы)' : ''}</div><div class="ps">Олл-ин</div></div><div class="pr"><b>—</b></div>${kick(p)}</div>`;
+        continue;
+      }
       if (p.sittingOut) notes.push('пропускает');
       if (!p.connected) notes.push('не в сети');
       if (tour) {
@@ -1137,7 +1356,7 @@ function playersHtml() {
         notes.push(`<span class="${net >= 0 ? 'plus' : 'minus'}">${net > 0 ? '+' : ''}${fmt(net, 'chips')}</span>`);
       }
       h += `<div class="line prow${p.id === S.you.id ? ' me' : ''}"><span class="num">${seated.indexOf(p) + 1}</span><span class="pav">${avatarHtml(p.avatar)}</span>
-        <div class="grow"><div class="pn">${esc(p.name)}${p.id === S.you.id ? ' (вы)' : ''}</div><div class="ps">${notes.join(' · ')}</div></div>
+        <div class="grow"><div class="pn">${esc(p.name)}${p.id === S.you.id ? ' (вы)' : ''}</div><div class="ps">${cap(notes.join(' · '))}</div></div>
         <div class="pr"><b>${fmt(p.stack, 'chips')}</b><small>${fmt(p.stack, 'bb')}</small></div>${kick(p)}</div>`;
     }
     h += '</div>';
@@ -1152,43 +1371,92 @@ function playersHtml() {
   if (watching.length) {
     h += '<span class="caption">Наблюдают</span><div class="group">';
     for (const p of watching) {
-      h += `<div class="line prow"><span class="pav">${avatarHtml(p.avatar)}</span><div class="grow"><div class="pn">${esc(p.name)}${p.id === S.you.id ? ' (вы)' : ''}</div><div class="ps">${p.connected ? 'смотрит игру' : 'не в сети'}</div></div>${kick(p)}</div>`;
+      h += `<div class="line prow"><span class="pav">${avatarHtml(p.avatar)}</span><div class="grow"><div class="pn">${esc(p.name)}${p.id === S.you.id ? ' (вы)' : ''}</div><div class="ps">Смотрит игру</div></div>${kick(p)}</div>`;
     }
     h += '</div>';
   }
-  h += tour
-    ? `<span class="caption">Турнир · блайнды ${fmt(S.cfg.sb, 'chips')}/${fmt(S.cfg.bb, 'chips')} · растут каждые ${S.tour.mins} мин</span>`
-    : `<span class="caption">Блайнды ${fmt(S.cfg.sb, 'chips')}/${fmt(S.cfg.bb, 'chips')} · стартовый стек ${fmt(S.cfg.startStack, 'chips')}</span>`;
-  return h;
+  if (offline.length) {
+    // строка как у сидящих: стек справа, «+/−» в подписи — чтобы было видно, с чем человек вернётся
+    h += '<span class="caption">Не в сети · вернутся под своим ником</span><div class="group">';
+    for (const p of offline) {
+      const c = p.chips;
+      const sub = c && !tour ? `<span class="${c.net >= 0 ? 'plus' : 'minus'}">${c.net > 0 ? '+' : ''}${fmt(c.net, 'chips')}</span>` : 'Не в сети';
+      const right = c && !tour ? `<div class="pr"><b>${fmt(c.stack, 'chips')}</b><small>${fmt(c.stack, 'bb')}</small></div>` : '';
+      h += `<div class="line prow off"><span class="pav">${avatarHtml(p.avatar)}</span><div class="grow"><div class="pn">${esc(p.name)}</div><div class="ps">${sub}</div></div>${right}${kick(p)}</div>`;
+    }
+    h += '</div>';
+  }
+  // админу — управление данными игроков прямо здесь, рядом со списком (раньше было в меню «Игра»)
+  if (S.you.isHost && !tour) { // в турнире статистику не сбрасывают — блока нет
+    const row = (label, control) => `<div class="line"><span class="grow">${label}</span>${control}</div>`;
+    h += '<span class="caption">Управление · админ</span><div class="group">';
+    if (offline.length) h += row('Не в сети', `<button data-cmd="purgeOffline" data-confirm="Убрать всех, кто не в сети (${offline.length})? Их фишки и докупки забудутся, ники и аватарки освободятся.">Убрать всех</button>`);
+    h += row('Статистика', '<button data-cmd="resetResults" data-confirm="Сбросить статистику? Фишки у всех останутся, а «+/−», счётчик докупок и кубки победителей турниров начнутся заново.">Сбросить</button>');
+    h += '</div>';
+  }
+  return h; // блайнды здесь не дублируем: они в шапке и на столе
 }
 // Справочник комбинаций. Во время раздачи он же подсказывает по вашим картам (S.hint с сервера):
 // собранная комбинация выделена и показывает ваши настоящие карты, у близких написано, скольких карт
 // не хватает, уже недостижимые бледнеют. Высота строк при этом не меняется.
+// «Комбинации»: в раздаче сначала ваша рука — что собрано сейчас и чем её усилить следующей картой (стопки тех самых
+// карт), при олл-ине — шансы и ауты. Полный справочник тогда свёрнут в строку «Все комбинации». Вне раздачи — сразу справочник.
+let combosOpen = false;
 function combosHtml() {
   const hint = S && S.hint;
-  let h = `<span class="caption">${hint ? 'От сильной к слабой · подсветка по вашим картам' : 'От самой сильной к самой слабой'}</span><div class="group">`;
+  let h = '';
+  let focus = false;
+  if (runoutActive) { h += allInHtml(curStage); focus = true; }
+  else if (S && S.phase === 'idle' && S.result && S.result.runout) {
+    const o = outsDockHtml(null); // карты открыты: «Пришла ваша карта» видно до конца раздачи
+    if (o) { h += `<span class="caption">Олл-ин</span><div class="group outsbox">${o}</div>`; focus = true; }
+  }
+  if (hint) {
+    focus = true;
+    h += `<div class="group hero"><div class="hs">У вас сейчас</div><div class="hn">${COMBOS[9 - hint.made][0]}</div><div class="hc">${hint.five.map((c) => cardHtml(c, 'xs' + (hint.core.includes(c) ? '' : ' dimc'))).join('')}</div></div>`;
+    const cats = Object.keys(hint.outs || {}).map(Number).filter((c) => hint.outs[c].length).sort((x, y) => y - x);
+    const total = cats.reduce((s, c) => s + hint.outs[c].length, 0);
+    if (total) {
+      h += `<span class="caption">Усилят следующей картой · ${total}</span><div class="group">`;
+      for (const c of cats) h += `<div class="line combo"><div class="grow"><div class="cn">${COMBOS[9 - c][0]}</div></div>${fitPile(hint.outs[c])}<b class="ocount">${hint.outs[c].length}</b></div>`;
+      h += '</div>';
+    } else if (hint.outs) h += '<div class="group note">Следующей картой рука не усилится</div>';
+    else if (S.board.length === 0) h += '<div class="group note">Чем усилить руку — покажу с флопа</div>';
+    else if (S.board.length === 5) h += '<div class="group note">Все карты на столе — дальше только торговля</div>';
+  }
+  if (focus && !combosOpen) return h + '<button class="combos-more" data-combos="1">Все комбинации ›</button>';
+  if (focus) h += '<button class="combos-more" data-combos="0">Свернуть справочник</button>';
+  h += '<div class="group">';
   COMBOS.forEach((c, i) => {
-    const cat = 9 - i; // 9 — роял-флеш … 0 — старшая карта
-    let cls = '';
-    let sub = '';
-    let cards = c[1].split(' ').map((card, k) => (k < c[2] ? card : null));
-    if (hint) {
-      if (hint.made === cat) {
-        cls = ' have';
-        sub = 'у вас';
-        cards = hint.core.concat(hint.five.filter((x) => !hint.core.includes(x)).map(() => null));
-        while (cards.length < 5) cards.push(null);
-      } else if (cat > hint.made) {
-        const need = hint.need[cat];
-        if (need > hint.toCome) cls = ' off';
-        else if (need === 1) sub = 'нужна 1 карта';
-        else if (need === 2) sub = 'нужно 2 карты';
-      }
-    }
-    const far = sub === 'нужно 2 карты' ? ' far' : ''; // две карты — дальняя перспектива, пишем спокойнее
-    h += `<div class="line combo${cls}"><span class="num">${i + 1}</span><div class="grow"><div class="cn">${c[0]}</div>${sub ? `<div class="cs${far}">${sub}</div>` : ''}</div><div class="cc">${cards.map((x) => cardHtml(x, 'xs')).join('')}</div></div>`;
+    const cards = c[1].split(' ').map((card, k) => (k < c[2] ? card : null));
+    h += `<div class="line combo"><span class="num">${i + 1}</span><div class="grow"><div class="cn">${c[0]}</div></div><div class="cc">${cards.map((x) => cardHtml(x, 'xs')).join('')}</div></div>`;
   });
-  return h + '</div><span class="caption">Карты рубашкой вверх в комбинацию не входят.</span>';
+  return h + '</div>';
+}
+// Олл-ин в «Комбинациях»: шансы каждого участника полосой и свои ауты стопкой (на столе их нет — там только игра).
+function allInHtml(stage) {
+  if (!stage) return '';
+  const ids = Object.keys(stage.eq).map(Number).sort((a, b) => stage.eq[b] - stage.eq[a]);
+  const lead = stage.eq[ids[0]];
+  let h = '<span class="caption">Олл-ин · шансы</span><div class="group">';
+  for (const i of ids) {
+    const s = S.seats[i];
+    if (!s) continue;
+    const mine = i === S.you.seat;
+    h += `<div class="line prow eqrow${mine ? ' me' : ''}"><span class="pav">${avatarHtml(s.avatar)}</span><div class="grow"><div class="pn">${esc(s.name)}${mine ? ' (вы)' : ''}</div><div class="eqbar"><i style="width:${stage.eq[i]}%"${stage.eq[i] === lead ? ' class="lead"' : ''}></i></div></div><b class="eqv${stage.eq[i] === lead ? ' lead' : ''}">${stage.eq[i]}%</b></div>`;
+  }
+  h += '</div>';
+  const out = outsDockHtml(stage); // свои ауты или «Пришла ваша карта»
+  const me = S.you.seat;
+  if (out) h += `<div class="group outsbox">${out}</div>`;
+  else if (stage.eq[me] != null && stage.board >= 3 && stage.eq[me] === Math.max(...Object.values(stage.eq))) h += '<div class="group note">Вы впереди — соперникам нужна карта</div>';
+  return h;
+}
+// Стопка в строке комбинации: занимает ту же ширину, что пять карт-образцов; если карт больше, они ложатся внахлёст.
+function fitPile(cards) {
+  const W = 5 * 24 + 4 * 3; // ширина пяти мини-карт с зазорами
+  const step = cards.length > 5 ? Math.max(4, (W - 24) / (cards.length - 1)) : 27;
+  return `<div class="cc pile-fit" style="width:${W}px">${cards.map((c, k) => cardHtml(c, 'xs', k ? `margin-left:${(step - 24).toFixed(1)}px` : '')).join('')}</div>`;
 }
 function renderSide() {
   for (const b of document.querySelectorAll('#sidePanel [data-tab]')) b.classList.toggle('on', b.dataset.tab === sideTab);
@@ -1214,6 +1482,8 @@ $('sideClose').onclick = closeSide;
 $('sidePanel').addEventListener('click', (e) => {
   const b = e.target.closest('[data-tab]');
   if (b) { sideTab = b.dataset.tab; renderSide(); $('sideBody').scrollTop = 0; syncNav(); }
+  const m = e.target.closest('[data-combos]');
+  if (m) { combosOpen = m.dataset.combos === '1'; renderSide(); }
 });
 
 // Подсветка значков, у которых сейчас открыта панель или меню.
@@ -1245,7 +1515,7 @@ function toggleReactions(btn) {
   const cx = Math.min(vw - 8 - half, Math.max(8 + half, (r.left + r.width / 2) / k)); // не выходить за края окна
   const cy = (r.top + r.height / 2) / k + (seat ? 0 : 14); // под шапкой — с зазором от панели значков
   pop.innerHTML = prefs.reactions.map((id, i) => {
-    const a = ((mid + (i - (n - 1) / 2) * RX_STEP) * Math.PI) / 180;
+    const a = ((mid + (seat ? 1 : -1) * (i - (n - 1) / 2) * RX_STEP) * Math.PI) / 180; // первая выбранная — слева, и сверху, и снизу
     const dx = Math.round(RX_RADIUS * Math.cos(a));
     const dy = Math.round(RX_RADIUS * Math.sin(a));
     return `<button data-id="${id}" title="${REACTIONS[id][0]}" style="left:${cx + dx}px;top:${cy + dy}px;--dx:${-dx}px;--dy:${-dy}px;animation-delay:${i * 35}ms">${reactionSvg(id)}</button>`;
@@ -1270,7 +1540,7 @@ function renderSeatMenu() {
   } else if (S.seats.some((x) => !x) && !tourOn()) {
     h += '<button data-cmd="sit">Сесть за стол</button>';
   }
-  h += `${h ? '<hr>' : ''}<button class="danger" data-cmd="quit" data-confirm="Выйти из игры? Ваши фишки и место будут забыты, ник освободится. Чтобы сохранить фишки, лучше «Встать и наблюдать».">Выйти из игры</button>`;
+  h += `${h ? '<hr>' : ''}<button class="danger" data-cmd="quit" data-confirm="Выйти из игры? Место и ник освободятся. Если вернётесь под тем же ником до «Начать заново», фишки и счёт докупок будут прежними.">Выйти из игры</button>`;
   $('seatMenu').innerHTML = h;
 }
 
@@ -1337,6 +1607,7 @@ function renderSettings() {
     h += line('Блайнды растут каждые', '<div class="seg">' + [5, 10, 15].map((m) => `<button data-tourmin="${m}"${on(R.tourMin === m)}>${m} мин</button>`).join('') + '</div>');
     h += line('Стек', '<div class="seg">' + [5000, 10000, 20000].map((v) => `<button data-tstack="${v}"${on(R.tourStack === v)}>${fmt(v, 'chips')}</button>`).join('') + '</div>');
     h += line('Докупок на игрока', '<div class="seg">' + [0, 1, 2, 3].map((v) => `<button data-trebuy="${v}"${on(R.tourRebuy === v)}>${v}</button>`).join('') + '</div>');
+    h += line('Автораздача', `<button class="switch${R.tourAutoDeal ? ' on' : ''}" data-tautodeal="${R.tourAutoDeal ? 0 : 1}" title="Новая раздача и улицы — сами, без кнопки дилера"></button>`);
     h += line('Время на ход', '<div class="seg">' + [[30000, '30 с'], [60000, '1 мин'], [0, 'Без времени']].map((o) => `<button data-tturn="${o[0]}"${on(R.tourTurn === o[0])}>${o[1]}</button>`).join('') + '</div>');
     h += `<div class="line"><span class="grow hint">${tourOn() ? 'Изменения — со следующего турнира или после «Начать заново».' : `Старт ${fmt(Math.floor(bb / 2), 'chips')}/${fmt(bb, 'chips')}. Докупка — сразу, как кончились фишки.`}</span></div>`;
     h += '</div><div class="group gap">';
@@ -1351,7 +1622,7 @@ function renderSettings() {
     const cfg = S.pendingCfg || S.cfg;
     const busy = tourOn(); // во время турнира блайнды, стек и докупки обычной игры не меняются
     h = '<div class="sheet-head"><h2>Игра</h2><button id="setClose" class="icon" title="Закрыть"><svg class="ic" viewBox="0 0 24 24"><path d="M7 7l10 10M17 7L7 17"/></svg></button></div>' + lookGroup(on, line) + '<span class="caption">Правила</span><div class="group">';
-    h += line('Новая раздача', `<div class="seg"><button data-nexthand="dealer"${on(S.rules.nextHand !== 'auto')}>По кнопке дилера</button><button data-nexthand="auto"${on(S.rules.nextHand === 'auto')}>Автоматически</button></div>`);
+    h += line('Автораздача', `<button class="switch${S.rules.nextHand === 'auto' ? ' on' : ''}" data-nexthand="${S.rules.nextHand === 'auto' ? 'dealer' : 'auto'}" title="Новая раздача и улицы — сами, без кнопки дилера"></button>`);
     h += line('Время на ход', '<div class="seg">' + [[30000, '30 с'], [60000, '1 мин'], [0, 'Без времени']].map((o) => `<button data-turn="${o[0]}"${on(S.rules.turnMs === o[0])}>${o[1]}</button>`).join('') + '</div>');
     if (busy) {
       h += '<div class="line"><span class="grow hint">Идёт турнир. Блайнды, стек и докупки обычной игры — после него.</span></div>';
@@ -1361,10 +1632,6 @@ function renderSettings() {
       h += line('Докупок на игрока', '<div class="seg">' + [[0, '0'], [1, '1'], [2, '2'], [3, '3'], [-1, 'Без лимита']].map((o) => `<button data-rebuy="${o[0]}"${on(S.rules.rebuyLimit === o[0])}>${o[1]}</button>`).join('') + '</div>');
       h += `<div class="line"><span class="grow hint">${S.pendingCfg ? 'Новые значения вступят в силу со следующей раздачи.' : 'Блайнды и стек меняются со следующей раздачи.'}</span><button id="setApply">Применить</button></div>`;
     }
-    h += '</div><span class="caption">Данные игроков</span><div class="group">';
-    const offline = S.people.filter((p) => !p.connected && p.id !== S.you.id).length;
-    if (!busy) h += line('Статистика', '<button data-cmd="resetResults" data-confirm="Сбросить статистику? Фишки у всех останутся, а «+/−», счётчик докупок и кубки победителей турниров начнутся заново.">Сбросить</button>');
-    h += line(`Не в сети: ${offline}`, offline ? `<button data-cmd="purgeOffline" data-confirm="Убрать всех, кто не в сети (${offline})? Их ники освободятся, фишки забудутся.">Убрать</button>` : '<span class="hint">никого</span>');
     h += '</div><div class="group gap">';
     h += line('Новая игра', '<button class="danger" data-cmd="restart" data-confirm="Начать игру заново? Стеки, докупки и настройки стола вернутся к начальным, все игроки снова отметят готовность.">Начать заново</button>');
     h += '</div>';
@@ -1403,6 +1670,7 @@ $('settings').addEventListener('click', (e) => {
   else if (b.dataset.rebuy !== undefined) cmd('settings', { rebuyLimit: Number(b.dataset.rebuy) });
   else if (b.dataset.turn !== undefined) cmd('settings', { turnMs: Number(b.dataset.turn) });
   else if (b.dataset.nexthand) cmd('settings', { nextHand: b.dataset.nexthand });
+  else if (b.dataset.tautodeal !== undefined) cmd('settings', { tourAutoDeal: b.dataset.tautodeal === '1' });
   else if (b.dataset.theme) cmd('settings', { theme: b.dataset.theme });
   else if (b.dataset.cards) cmd('settings', { cards: b.dataset.cards });
   else if (b.id === 'setApply') cmd('settings', { bb: digits($('setBB').value), startStack: digits($('setStack').value) });
