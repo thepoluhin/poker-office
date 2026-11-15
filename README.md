@@ -16,7 +16,7 @@
 
 <br>
 
-<img src="docs/screenshots/table-classic.png" alt="Стол «Покер Офис»: флоп, ход игрока" width="900">
+<img src="docs/screenshots/demo.gif" alt="Раздача в «Покер Офис»: от сдачи карт до вскрытия" width="900">
 
 </div>
 
