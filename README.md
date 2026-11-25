@@ -6,7 +6,7 @@
 
 Один компьютер запускает игру, остальные открывают ссылку в браузере и садятся за стол.
 
-[![Версия](https://img.shields.io/badge/версия-1.3.1-0a84ff)](https://github.com/thepoluhin/poker-office/releases)
+[![Версия](https://img.shields.io/badge/версия-1.4.0-0a84ff)](https://github.com/thepoluhin/poker-office/releases)
 [![Лицензия MIT](https://img.shields.io/badge/лицензия-MIT-30d158)](LICENSE)
 ![Windows](https://img.shields.io/badge/Windows-exe-555)
 ![Node.js](https://img.shields.io/badge/Node.js-без_зависимостей-5fa04e)
@@ -26,7 +26,7 @@
 
 ## Возможности
 
-- 🃏 **Честный холдем.** Блайнды, минимальный рейз, неполный олл-ин, побочные банки, деление банка с нечётной фишкой. 25 автотестов движка, включая 5000 случайных раздач.
+- 🃏 **Холдем.** Блайнды, минимальный рейз, неполный олл-ин, побочные банки и деление банка с нечётной фишкой. Автотесты проверяют правила торговли и сохранение фишек в случайных раздачах.
 - 🏆 **Турнир.** Приглашение всем за столом, блайнды растут по часам на сукне, места и золотая фишка победителю.
 - 📈 **Шансы при олл-ине.** Проценты по улицам и подсказка, чем усилить руку.
 - 💬 **Чат, реакции и ход игры.** 20 аватарок, 20 реакций (шесть любимых выбираются в профиле).
@@ -50,9 +50,10 @@
 
 ## Как начать
 
-1. Скачайте `Poker-Office-1.3.1.exe` из [Releases](https://github.com/thepoluhin/poker-office/releases/latest) и запустите на одном компьютере. Установка не нужна. Если SmartScreen предупредит о неизвестном издателе, нажмите «Подробнее» → «Выполнить в любом случае».
+1. Скачайте `Poker-Office-1.4.0.exe` из [Releases](https://github.com/thepoluhin/poker-office/releases/latest) и запустите на одном компьютере. Установка не нужна. Если SmartScreen предупредит о неизвестном издателе, нажмите «Подробнее» → «Выполнить в любом случае».
 2. В окне игры появится адрес вида `http://192.168.0.102:3000`. Отправьте его коллегам: они открывают его в браузере на своих компьютерах в той же сети.
 3. Каждый выбирает ник и аватарку и нажимает «Готов». Тот, кто запустил игру, становится админом и начинает партию.
+4. Каждый участник получает по открытой карте. Первый батон достаётся обладателю старшей карты. При равном достоинстве старшинство мастей — ♠ пики, ♥ червы, ♦ бубны, ♣ трефы. Победитель нажимает «Новая раздача». При автораздаче игра начинается через 7 секунд. Дальше батон переходит по кругу.
 
 Если Windows спросит про доступ к сети, разрешите доступ в частных сетях: иначе коллеги не подключатся.
 
@@ -71,6 +72,7 @@
 ```bash
 cd src
 node test.js     # тесты движка
+node --test test-server.js   # проверки сервера
 node server.js   # игра на http://localhost:3000
 ```
 
@@ -121,7 +123,7 @@ powershell -ExecutionPolicy Bypass -File src/build/build.ps1
 
 ## In English
 
-**Poker Office** is a Texas Hold'em game for 2–6 players over a local network. One Windows PC runs `Poker-Office-1.3.1.exe` (a single file, no install), everyone else joins from a browser via the LAN address shown in its window. No internet, no accounts, play chips only. Features: correct side pots and all-in rules, tournaments with blind clock, live all-in equities, chat and reactions, four table themes, table state survives restarts. The server is plain Node.js with zero dependencies (SSE + JSON commands). The interface is in Russian. MIT licensed.
+**Poker Office** is a Texas Hold'em game for 2–6 players over a local network. One Windows PC runs `Poker-Office-1.4.0.exe` (a single file, no install), everyone else joins from a browser via the LAN address shown in its window. No internet, no accounts, play chips only. Features: correct side pots and all-in rules, tournaments with blind clock, live all-in equities, chat and reactions, four table themes, table state survives restarts. The server is plain Node.js with zero dependencies (SSE + JSON commands). The interface is in Russian. MIT licensed.
 
 ## Лицензия
 

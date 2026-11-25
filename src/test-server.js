@@ -91,6 +91,65 @@ async function fixture(t) {
   return { dir, start, stop, join, connect };
 }
 
+for (const mode of ['ручная', 'автоматическая', 'турнирная']) {
+  test('жеребьёвка: ' + mode + ' раздача', async t => {
+    const f = await fixture(t);
+    await f.start();
+    const host = await f.join('Ведущий', avatars[0]);
+    const guest = await f.join('Гость', avatars[1]);
+    const observer = await f.join('Наблюдатель', avatars[2]);
+    if (mode === 'турнирная') {
+      await host.cmd('tourGather');
+      await guest.cmd('tourAnswer', { agree: true });
+      await host.cmd('tourStart');
+    } else {
+      if (mode === 'автоматическая') await host.cmd('settings', { nextHand: 'auto' });
+      await guest.cmd('ready', { value: true });
+      await host.cmd('start');
+    }
+    const players = [host, guest];
+    for (const p of [...players, observer]) await until(() => p.state.buttonDraw, 'Не видно жеребьёвки', 8000);
+    const { winner, cards } = host.state.buttonDraw;
+    const participatingSeats = players.map(p => p.state.you.seat);
+    assert.equal(cards.filter(Boolean).length, 2);
+    assert.equal(new Set(cards.filter(Boolean)).size, 2);
+    for (const seat of participatingSeats) assert.match(cards[seat], /^[2-9TJQKA][shdc]$/);
+    for (const p of [...players, observer]) {
+      assert.deepEqual(p.state.buttonDraw.cards, cards);
+      assert.equal(p.state.buttonDraw.winner, winner);
+      assert.equal(p.state.pot, 0);
+      assert.equal(p.state.phase, 'idle');
+      assert.ok(p.state.seats.every(s => !s || !s.hasCards));
+    }
+    const strength = c => '23456789TJQKA'.indexOf(c[0]) * 4 + 'cdhs'.indexOf(c[1]);
+    assert.equal(strength(cards[winner]), Math.max(...cards.filter(Boolean).map(strength)));
+    if (mode === 'автоматическая') {
+      assert.ok(host.state.buttonDraw.remainingMs > 0 && host.state.buttonDraw.remainingMs <= 7000);
+    } else {
+      assert.equal(host.state.dealerSeat, winner);
+      const dealer = players.find(p => p.state.you.seat === winner);
+      const other = players.find(p => p !== dealer);
+      await assert.rejects(other.cmd('deal'), /дилер/i);
+      await dealer.cmd('deal');
+    }
+    await until(() => host.state.phase === 'preflop', 'Первая раздача не началась', 10000);
+    assert.equal(host.state.button, winner);
+    assert.ok(!host.state.buttonDraw);
+    assert.ok(host.state.pot > 0);
+    if (mode === 'ручная') {
+      const dealer = players.find(p => p.state.you.seat === winner);
+      const next = players.find(p => p !== dealer);
+      await dealer.cmd('act', { action: 'fold' });
+      await until(() => host.state.waitDealer, 'Игра не ждёт следующего дилера');
+      assert.ok(!host.state.buttonDraw);
+      assert.equal(host.state.dealerSeat, next.state.you.seat);
+      await next.cmd('deal');
+      await until(() => host.state.phase === 'preflop', 'Вторая раздача не началась');
+      assert.equal(host.state.button, next.state.you.seat);
+    }
+  });
+}
+
 for (const move of ['fold', 'check']) {
   test('пауза и уход действующего игрока: автоматический ' + move, async t => {
     const f = await fixture(t);
@@ -99,9 +158,13 @@ for (const move of ['fold', 'check']) {
     const guest = await f.join('Гость', avatars[1]);
     await guest.cmd('ready', { value: true });
     await host.cmd('start');
-    const actor = move === 'fold' ? host : guest;
-    const remaining = move === 'fold' ? guest : host;
-    if (move === 'check') await host.cmd('act', { action: 'call' });
+    await until(() => host.state.buttonDraw, 'Нет жеребьёвки');
+    const button = [host, guest].find(p => p.state.you.seat === host.state.buttonDraw.winner);
+    const blind = button === host ? guest : host;
+    await button.cmd('deal');
+    const actor = move === 'fold' ? button : blind;
+    const remaining = actor === host ? guest : host;
+    if (move === 'check') await button.cmd('act', { action: 'call' });
     await until(() => actor.state.toAct === actor.state.you.seat, 'Не наступил ход');
     assert.equal(actor.state.legal.canCheck, move === 'check');
     await host.cmd('pauseRequest');

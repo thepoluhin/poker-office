@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
-const { Game, SEATS, outlook, improveOuts, equities, outsOf } = require('./engine');
+const { Game, drawButton, SEATS, outlook, improveOuts, equities, outsOf } = require('./engine');
 
 const FIRST_PORT = Number(process.env.PORT) || 3000;
 let PORT = FIRST_PORT;
@@ -210,7 +210,9 @@ function view(c) {
     waitStreet: !!game.waitStreet, streetIn: game.waitStreet ? Math.max(0, streetReadyAt - Date.now()) : 0, autoDeal: autoDeal(),
     runoutLive: liveStage(),
     running, paused, pausedBy: paused ? pausedBy : '', rules, tour: tourView(),
-    waitDealer, dealerSeat: waitDealer ? nextDealerSeat() : -1,
+    buttonDraw: buttonDraw ? { cards: buttonDraw.cards, winner: buttonDraw.winner, remainingMs: drawTimeLeft() } : null,
+    waitDealer: buttonDraw ? !autoDeal() : waitDealer,
+    dealerSeat: buttonDraw ? buttonDraw.winner : waitDealer ? nextDealerSeat() : -1,
     rebuyReqs: [...rebuyReqs.values()].map((r) => ({ id: r.id, mode: r.mode, votes: [...r.votes], needed: rebuyApprovers(r).map((p) => p.id) })),
     pauseReq: pauseReq ? { by: pauseReq.by, votes: [...pauseReq.votes], needed: pauseVoters().map((p) => p.id) } : null,
     result: res ? { showdown: res.showdown, pots: res.pots, payouts: res.payouts, hands: res.hands, runout: res.runout, rest: res.rest } : null,
@@ -218,6 +220,7 @@ function view(c) {
 }
 
 function push() {
+  syncButtonDraw();
   syncTurnTimer();
   for (const c of clients.values()) send(c, 'state', view(c));
   scheduleSave();
@@ -469,6 +472,7 @@ function finishTournament() {
   clearTimeout(tour.finishTimer);
   tour.finishTimer = null;
   if (tour.phase !== 'play') return;
+  clearButtonDraw();
   bustLeavers();
   for (let i = 0; i < SEATS; i++) if (game.seats[i] && game.seats[i].leaving) game.seats[i] = null; // ушедшие уже не за столом
   const w = tourAlive()[0];
@@ -488,6 +492,7 @@ function tourCheckEnd() {
   if (tour.phase === 'play' && game.phase === 'idle' && !tour.finishTimer && tourAlive().length <= 1) finishTournament();
 }
 function clearTable() {
+  clearButtonDraw();
   for (let i = 0; i < SEATS; i++) game.seats[i] = null;
   Object.assign(game, { phase: 'idle', board: [], button: -1, toAct: -1, currentBet: 0, result: null });
 }
@@ -522,8 +527,8 @@ function beginTournament() {
   running = true;
   boardLogged = 0;
   note({ kind: 'log', act: 'tourstart', hand: game.handNo, text: `Турнир начался · игроков ${ids.length}` });
+  drawPending = true;
   push();
-  scheduleNextHand(3000);
 }
 // Выход из турнира: стол обычной игры возвращается таким, каким был до турнира.
 function endTournament() {
@@ -673,6 +678,59 @@ function scheduleNextHand(delay) {
 // Следующий дилер: первый после нынешней фишки «D» игрок с фишками, который в игре и в сети.
 // Кто пропускает раздачи, роль дилера пропускает. Отключившийся дилер её сохраняет: стол ждёт, админ решает.
 let waitDealer = false;
+const DRAW_MS = 7000;
+let drawPending = false;
+let buttonDraw = null;
+let drawTimer = null;
+let drawDeadline = 0;
+let drawRemaining = DRAW_MS;
+
+function drawTimeLeft() {
+  return drawDeadline ? Math.max(0, drawDeadline - Date.now()) : drawRemaining;
+}
+
+function clearButtonDraw() {
+  clearTimeout(drawTimer);
+  drawTimer = null;
+  drawDeadline = 0;
+  drawRemaining = DRAW_MS;
+  drawPending = false;
+  buttonDraw = null;
+}
+
+function syncButtonDraw() {
+  if (!drawPending) return;
+  const seats = [];
+  game.seats.forEach((s, i) => { if (s && !s.leaving && game.eligible(i)) seats.push(i); });
+  const roster = seats.map(i => i + ':' + game.seats[i].id).join(',');
+  if (!buttonDraw || buttonDraw.roster !== roster) {
+    clearButtonDraw();
+    drawPending = true;
+    if (seats.length < 2) { game.button = -1; return; }
+    buttonDraw = { ...drawButton(seats), roster };
+    game.button = buttonDraw.winner;
+    const winner = game.seats[game.button];
+    note({ kind: 'log', text: 'Первый дилер — ' + winner.name });
+  }
+  if (!autoDeal() || paused) {
+    drawRemaining = autoDeal() ? drawTimeLeft() : DRAW_MS;
+    clearTimeout(drawTimer);
+    drawDeadline = 0;
+    drawTimer = null;
+  } else if (!drawTimer) {
+    drawDeadline = Date.now() + drawRemaining;
+    drawTimer = setTimeout(finishButtonDraw, drawRemaining);
+  }
+}
+
+function finishButtonDraw() {
+  const winner = buttonDraw.winner;
+  clearButtonDraw();
+  // startHand сдвинет батон на следующее участвующее место — победителя.
+  game.button = (winner + SEATS - 1) % SEATS;
+  tryStartHand();
+}
+
 function nextDealerSeat() {
   for (let k = 1; k <= SEATS; k++) {
     const i = (((game.button + k) % SEATS) + SEATS) % SEATS;
@@ -683,7 +741,7 @@ function nextDealerSeat() {
 }
 
 function tryStartHand() {
-  if (!running || paused || game.phase !== 'idle' || nextHandTimer || waitDealer || tour.finishTimer || tour.phase === 'starting') return;
+  if (drawPending || !running || paused || game.phase !== 'idle' || nextHandTimer || waitDealer || tour.finishTimer || tour.phase === 'starting') return;
   cleanupSeats();
   if (pendingCfg) { Object.assign(game.cfg, pendingCfg); pendingCfg = null; }
   if (tour.phase === 'play') {
@@ -814,7 +872,8 @@ const commands = {
     for (const s of game.seats) if (s) s.sittingOut = !s.ready;
     running = true;
     log('Админ начинает игру');
-    tryStartHand();
+    drawPending = true;
+    push();
   },
   ready(c, m) {
     const i = seatOf(c);
@@ -1041,6 +1100,12 @@ const commands = {
     openStreetNow();
   },
   deal(c) {
+    if (drawPending) {
+      if (!buttonDraw || paused || autoDeal()) fail('Сейчас нельзя начать раздачу');
+      if (seatOf(c) !== buttonDraw.winner) fail('Новую раздачу начинает дилер');
+      finishButtonDraw();
+      return;
+    }
     if (!waitDealer) return;
     if (seatOf(c) !== nextDealerSeat()) fail('Новую раздачу начинает дилер');
     waitDealer = false;
@@ -1052,6 +1117,7 @@ const commands = {
   // Новая игра: стеки, докупки и настройки стола возвращаются к заводским, все снова отмечают готовность.
   restart(c) {
     if (!c.isHost) fail('Начать заново может только админ');
+    clearButtonDraw();
     clearTimeout(nextHandTimer);
     nextHandTimer = null;
     clearTimeout(turnTimer);

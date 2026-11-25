@@ -23,6 +23,20 @@ function shuffle(d) {
 
 const rankOf = (c) => RANKS.indexOf(c[0]) + 2;
 
+// Отдельная колода для выбора первого батона. При равном ранге: пики, червы, бубны, трефы.
+function drawButton(seats, deck = shuffle(newDeck())) {
+  const cards = Array(SEATS).fill(null);
+  let winner = -1;
+  let best = -1;
+  for (const seat of seats) {
+    const card = deck.pop();
+    cards[seat] = card;
+    const score = rankOf(card) * 4 - SUITS.indexOf(card[1]);
+    if (score > best) { best = score; winner = seat; }
+  }
+  return { cards, winner };
+}
+
 function straightHigh(ranks) {
   const set = new Set(ranks);
   if (set.has(14)) set.add(1);
@@ -510,4 +524,4 @@ class Game {
   }
 }
 
-module.exports = { Game, outsOf, improveOuts, evaluate, bestFive, outlook, equities, compareScores, handName, newDeck, shuffle, SEATS };
+module.exports = { Game, drawButton, outsOf, improveOuts, evaluate, bestFive, outlook, equities, compareScores, handName, newDeck, shuffle, SEATS };

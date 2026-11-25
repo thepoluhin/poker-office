@@ -2,7 +2,7 @@
 // Автотесты движка: node test.js
 const assert = require('assert');
 const crypto = require('crypto');
-const { Game, evaluate, bestFive, outlook, equities, compareScores, handName, newDeck } = require('./engine');
+const { Game, evaluate, bestFive, outlook, equities, compareScores, handName, newDeck, drawButton } = require('./engine');
 
 let passed = 0;
 function test(name, fn) {
@@ -23,6 +23,17 @@ function table(stacks, cfg) {
 const chips = (g) => g.seats.reduce((n, s) => n + (s ? s.stack + s.total * (g.phase === 'idle' ? 0 : 1) : 0), 0);
 
 console.log('Комбинации');
+test('жеребьёвка: достоинство старше масти, при равенстве ♠ > ♥ > ♦ > ♣', () => {
+  for (const [higher, lower] of [['2s', '2h'], ['2h', '2d'], ['2d', '2c'], ['Ac', 'Ks']]) {
+    for (const order of [[higher, lower], [lower, higher]]) {
+      const { cards, winner } = drawButton([1, 4], stacked(order.join(' ')));
+      assert.equal(cards[1], order[0]);
+      assert.equal(cards[4], order[1]);
+      assert.equal(cards.filter(Boolean).length, 2);
+      assert.equal(cards[winner], higher);
+    }
+  }
+});
 test('категории определяются верно', () => {
   assert.strictEqual(handName(ev('As Ks Qs Js Ts 2d 3c')), 'роял-флеш');
   assert.strictEqual(handName(ev('9s 8s 7s 6s 5s Ad Ac')), 'стрит-флеш');

@@ -17,7 +17,7 @@ using System.Windows.Forms;
 
 [assembly: AssemblyTitle("Покер Офис")]
 [assembly: AssemblyProduct("Покер Офис")]
-[assembly: AssemblyVersion("1.3.1.0")]
+[assembly: AssemblyVersion("1.4.0.0")]
 
 static class Program
 {

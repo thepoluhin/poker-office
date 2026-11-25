@@ -89,6 +89,9 @@ let es = null;
 let S = null;
 let avatar = null;
 let deadline = 0;
+let drawDeadline = 0;
+let drawSequence = '';
+let drawStarted = 0;
 let raiseTo = 0;
 let footerKey = '';
 let pageBuild = ''; // отпечаток сборки, с которой загружена страница
@@ -236,6 +239,7 @@ function connect() {
   es.addEventListener('state', (e) => {
     S = JSON.parse(e.data);
     deadline = performance.now() + S.turnLeft;
+    drawDeadline = performance.now() + (S.buttonDraw?.remainingMs || 0);
     tourDeadline = S.tour ? performance.now() + S.tour.levelLeft : 0;
     streetReady = performance.now() + (S.streetIn || 0);
     if (S.streetIn) setTimeout(() => { if (S) redrawFooter(); }, S.streetIn + 30);
@@ -567,6 +571,11 @@ function render() {
   // Раздача: карты по очереди вылетают из центра стола к игрокам, начиная слева от дилера.
   const order = [];
   if (newHand) for (let k = 1; k <= 6; k++) { const i = (S.button + k) % 6; if (S.seats[i] && S.seats[i].inHand) order.push(i); }
+  const drawKey = S.buttonDraw?.cards.join(',') || '';
+  if (drawKey !== drawSequence) {
+    drawSequence = drawKey;
+    drawStarted = performance.now();
+  }
   const tableW = $('table').offsetWidth;
   const tableH = $('table').offsetHeight;
   const dealStyle = (i, v, n) => {
@@ -597,13 +606,15 @@ function render() {
     const isDealer = S.waitDealer && i === S.dealerSeat; // ждём, когда дилер начнёт новую раздачу
     if (isDealer) cls.push('dealer-wait');
     let hole = '';
-    if (s.cards || s.hasCards) {
+    const drawCard = S.buttonDraw?.cards[i];
+    if (drawCard || s.cards || s.hasCards) {
       const size = i === me ? 'lg' : 'sm';
-      const anim = newHand ? ' deal' : '';
+      const drawDelay = drawCard ? S.buttonDraw.cards.slice(0, i).filter(Boolean).length * 140 - (performance.now() - drawStarted) : 0;
+      const anim = drawCard ? (drawDelay > -350 ? ' draw-flip' : '') : newHand ? ' deal' : '';
       const side = i === me ? '' : (v >= 4 ? 'left' : 'right');
-      const faces = s.cards || [null, null];
+      const faces = drawCard ? [drawCard] : s.cards || [null, null];
       const lost = win.on && !winners.has(i);
-      const cards = faces.map((c, n) => cardHtml(c, size + anim + (c ? (lost ? ' miss' : winClass(c, win)) : ''), newHand ? dealStyle(i, v, n) : '')).join('');
+      const cards = faces.map((c, n) => cardHtml(c, size + anim + (c ? (lost ? ' miss' : winClass(c, win)) : ''), drawCard ? `animation-delay:${drawDelay}ms` : newHand ? dealStyle(i, v, n) : '')).join('');
       hole = `<div class="hole ${side}">${cards}</div>`;
     }
     let line = `<div class="st">${fmt(s.stack)}</div>`;
@@ -630,8 +641,8 @@ function render() {
       <div class="plate"><div class="nm">${esc(s.name)}</div>${line}</div>${hand}</div>`;
     if (s.bet > 0) html += `<div class="bet${BET_EDGE[v] || ''}" style="${place(BET[v])}">${fmt(s.bet)}</div>`;
     // раздача кончилась и ждём дилера — фишка D уже у того, кто начнёт следующую (вместе с подписью «Дилер»)
-    const dSeat = S.waitDealer && S.dealerSeat >= 0 ? S.dealerSeat : S.button;
-    if (i === dSeat && S.handNo) html += `<div class="dealer" style="${place(DEALER[v])}" title="Дилер">D</div>`;
+    const dSeat = S.buttonDraw ? S.buttonDraw.winner : S.waitDealer && S.dealerSeat >= 0 ? S.dealerSeat : S.button;
+    if (i === dSeat && (S.buttonDraw || S.handNo)) html += `<div class="dealer" style="${place(DEALER[v])}" title="Дилер">D</div>`;
   }
   $('seats').innerHTML = html;
   $('table').classList.toggle('spot', !!stage); // свет на участниках олл-ина и общих картах
@@ -682,6 +693,13 @@ function render() {
 
 function renderStatus() {
   const el = $('status');
+  if (S.buttonDraw) {
+    const winner = S.seats[S.buttonDraw.winner];
+    el.innerHTML = '<div class="hint">Жеребьёвка первого батона</div>' +
+      (winner ? `<div>Первый дилер — ${esc(winner.name)}</div>` : '') +
+      (S.autoDeal ? '<div class="hint" id="drawCountdown"></div>' : '');
+    return;
+  }
   if (tourPhase() === 'done') {
     const w = S.tour.places.find((p) => p.place === 1);
     el.innerHTML = `<div class="win">Победитель турнира — ${esc(w ? w.name : '')}</div>${S.you.isHost ? '' : '<div class="hint">Ждём решения админа</div>'}`;
@@ -916,6 +934,12 @@ document.addEventListener('click', (e) => {
 
 // ---------- таймер хода: кольцо вокруг аватарки ----------
 function tick() {
+  if (S?.buttonDraw && S.autoDeal) {
+    const counter = $('drawCountdown');
+    const ms = S.paused ? S.buttonDraw.remainingMs : drawDeadline - performance.now();
+    const text = 'До первой раздачи · ' + Math.max(0, Math.ceil(ms / 1000)) + ' с';
+    if (counter && counter.textContent !== text) counter.textContent = text;
+  }
   if (S && tourPhase() === 'play' && !S.paused) {
     const text = infoText(); // обратный отсчёт до роста блайндов
     if ($('info').textContent !== text) $('info').textContent = text;
@@ -1441,7 +1465,7 @@ function combosHtml() {
     const cards = c[1].split(' ').map((card, k) => (k < c[2] ? card : null));
     h += `<div class="line combo"><span class="num">${i + 1}</span><div class="grow"><div class="cn">${c[0]}</div></div><div class="cc">${cards.map((x) => cardHtml(x, 'xs')).join('')}</div></div>`;
   });
-  return h + '</div>';
+  return h + '</div><span class="caption">Жеребьёвка первого батона</span><div class="group draw-rule">Батон получает игрок со старшей картой. При равном достоинстве — по масти, от старшей к младшей: ♠ пики, ♥ червы, ♦ бубны, ♣ трефы.</div>';
 }
 // Олл-ин в «Комбинациях»: шансы каждого участника полосой и свои ауты стопкой (на столе их нет — там только игра).
 function allInHtml(stage) {
