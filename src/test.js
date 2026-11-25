@@ -229,6 +229,18 @@ test('неполный олл-ин не даёт уже ходившим пов�
   g.act(0, 'call');
   assert.strictEqual(g.phase, 'flop');
 });
+test('два коротких олл-ина в сумме открывают полный рейз', () => {
+  const g = table([30, 40, 1000, 1000]);
+  g.startHand();
+  g.act(3, 'call');
+  g.act(0, 'raise', 30);
+  g.act(1, 'raise', 40);
+  g.act(2, 'call');
+  assert.strictEqual(g.legal(3).canRaise, true);
+  assert.strictEqual(g.legal(3).minTo, 60);
+  g.act(3, 'raise', 60);
+  assert.strictEqual(g.currentBet, 60);
+});
 test('побочные банки: короткий стек выигрывает только основной банк', () => {
   const g = table([1000, 100, 1000]);
   // раздача идёт с места 1: P1, P2, P0, потом второй круг; борд K 7 2 9 3

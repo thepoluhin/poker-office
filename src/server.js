@@ -186,6 +186,7 @@ function view(c) {
   const me = mySeat >= 0 ? game.seats[mySeat] : null;
   const hint = me && me.inHand && !me.folded && me.cards.length === 2 && game.phase !== 'idle' ? Object.assign(outlook(me.cards.concat(game.board), 5 - game.board.length), { outs: improveOuts(me.cards, game.board) }) : null;
   return {
+    ...(c.isHost ? { saveWarning } : {}),
     you: { id: c.id, seat: mySeat, isHost: c.isHost, name: c.name, avatar: c.avatar }, hint,
     cfg: game.cfg, pendingCfg, look, seats,
     links: lanAddresses().map((a) => `http://${a.address}:${PORT}`),
@@ -230,6 +231,8 @@ const SAVE_DIR = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'PokerLAN');
 const SAVE_FILE = path.join(SAVE_DIR, 'table.json');
 const SAVE_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // неделя
 let saveTimer = null;
+let lastSavedAt = null;
+let saveWarning = null;
 // Участник узнаётся по ключу своего браузера, а не по нику: после перезапуска приложения он сам
 // возвращается на своё место, а чужой человек с тем же ником занять его не может.
 function snapshot() {
@@ -248,16 +251,26 @@ function snapshot() {
     people.push({ token: c.token, name: c.name, avatar: c.avatar, cups: c.cups || 0, seat: s && !s.leaving ? i : -1, chips });
   }
   const saved = cash ? Object.assign({}, rules, { mode: 'cash', turnMs: cash.turnMs }) : rules;
-  return { version: 2, savedAt: Date.now(), cfg: cash ? cash.cfg : game.cfg, look, rules: saved, people };
+  return { version: 2, savedAt: Date.now(), cfg: cash ? cash.cfg : game.cfg, look, rules: saved, people, departed: [...departed] };
 }
-function saveNow() {
+function saveNow(onExit = false) {
+  const previousWarning = saveWarning;
   clearTimeout(saveTimer);
   saveTimer = null;
   try {
     fs.mkdirSync(SAVE_DIR, { recursive: true });
-    fs.writeFileSync(SAVE_FILE + '.tmp', JSON.stringify(snapshot()));
+    const table = snapshot();
+    fs.writeFileSync(SAVE_FILE + '.tmp', JSON.stringify(table));
     fs.renameSync(SAVE_FILE + '.tmp', SAVE_FILE);
-  } catch (e) { /* не удалось сохранить — игра продолжается */ }
+    lastSavedAt = table.savedAt;
+    saveWarning = null;
+  } catch (e) {
+    if (!saveWarning) saveWarning = { lastSavedAt };
+    if (!onExit) saveTimer = setTimeout(saveNow, 5000);
+  }
+  if (!onExit && previousWarning !== saveWarning) {
+    for (const c of clients.values()) if (c.isHost && c.res) send(c, 'state', view(c));
+  }
 }
 function scheduleSave() {
   if (!saveTimer) saveTimer = setTimeout(saveNow, 400);
@@ -275,6 +288,8 @@ function restoreTable() {
       if (p.chips) ledger.set(c.token, p.chips);
       if (p.seat >= 0) seatClient(c, p.seat, true);
     }
+    for (const [name, chips] of d.departed || []) departed.set(name, chips);
+    lastSavedAt = d.savedAt;
     return clients.size;
   } catch (e) {
     return 0;
@@ -721,7 +736,11 @@ function checkPauseVotes() {
 function resume() {
   paused = false;
   tourClock();
-  if (game.toAct >= 0) armTurn(turnLeftOnPause);
+  if (game.toAct >= 0) {
+    const remaining = turnLeftOnPause || turnMsFor(game.toAct);
+    if (!turnLeftOnPause) turnTotal = remaining;
+    armTurn(remaining);
+  }
   autoStreet(); // улица ждала, а дилера нет — после паузы откроется сама
 }
 
@@ -1055,7 +1074,7 @@ const commands = {
       const s = game.seats[i];
       if (!s) continue;
       if (s.leaving || s.busted) { game.seats[i] = null; continue; }
-      Object.assign(s, { stack: game.cfg.startStack, buyins: 1, bought: game.cfg.startStack, ready: false, sittingOut: false, cards: [], bet: 0, total: 0, inHand: false, folded: false, allIn: false, acted: false, noRaise: false });
+      Object.assign(s, { stack: game.cfg.startStack, buyins: 1, bought: game.cfg.startStack, ready: false, sittingOut: false, cards: [], bet: 0, total: 0, inHand: false, folded: false, allIn: false, acted: false });
     }
     Object.assign(game, { phase: 'idle', board: [], handNo: 0, button: -1, toAct: -1, currentBet: 0, result: null });
     running = false;
@@ -1349,7 +1368,7 @@ if (FROM_LAUNCHER) {
   process.stdin.on('error', () => process.exit(0));
   process.stdin.resume();
 }
-process.on('exit', () => { if (saveTimer) saveNow(); });
+process.on('exit', () => { if (saveTimer) saveNow(true); });
 
 const restored = restoreTable();
 if (restored) log(`Восстановлена прошлая игра: участников ${restored}. Каждый вернётся на своё место, открыв игру в том же браузере.`);

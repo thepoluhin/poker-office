@@ -484,6 +484,16 @@ function levelBanner(n) {
 }
 
 function render() {
+  const warning = S.you.isHost && S.saveWarning;
+  const notice = $('saveWarning');
+  notice.hidden = !warning;
+  if (warning) {
+    const lastSave = warning.lastSavedAt
+      ? 'Последнее сохранение — ' + new Date(warning.lastSavedAt).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })
+      : 'Успешных сохранений пока нет';
+    const text = 'Не удалось сохранить стол. ' + lastSave;
+    if (notice.textContent !== text) notice.textContent = text;
+  }
   document.body.dataset.theme = S.look.theme;
   document.body.dataset.cards = S.look.cards;
   const me = S.you.seat;

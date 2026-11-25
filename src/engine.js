@@ -221,7 +221,7 @@ class Game {
     if (this.seats[i]) throw new Error('Место занято');
     this.seats[i] = Object.assign({
       stack: this.cfg.startStack, cards: [], bet: 0, total: 0,
-      inHand: false, folded: false, allIn: false, acted: false, noRaise: false, sittingOut: false,
+      inHand: false, folded: false, allIn: false, acted: false, sittingOut: false,
     }, player);
     return this.seats[i];
   }
@@ -281,7 +281,7 @@ class Game {
     for (let i = 0; i < SEATS; i++) {
       const s = this.seats[i];
       if (!s) continue;
-      Object.assign(s, { cards: [], bet: 0, total: 0, folded: false, allIn: false, acted: false, noRaise: false });
+      Object.assign(s, { cards: [], bet: 0, total: 0, folded: false, allIn: false, acted: false });
       s.inHand = this.eligible(i);
     }
     const inHand = (i) => !!this.seats[i] && this.seats[i].inHand;
@@ -331,7 +331,9 @@ class Game {
     if (!s || this.toAct !== i) return null;
     const toCall = Math.min(this.currentBet - s.bet, s.stack);
     const maxTo = s.bet + s.stack;
-    const canRaise = !s.noRaise && maxTo > this.currentBet && this._othersCanAct(i) > 0;
+    // После своего действия игрок может повысить, если суммарный рост достиг полного рейза.
+    const reopened = !s.acted || this.currentBet - s.bet >= this.minRaise;
+    const canRaise = reopened && maxTo > this.currentBet && this._othersCanAct(i) > 0;
     return {
       toCall,
       canCheck: toCall === 0,
@@ -361,13 +363,6 @@ class Game {
       const raiseBy = to - this.currentBet;
       const full = raiseBy >= this.minRaise;
       this._post(i, to - s.bet);
-      for (let k = 0; k < SEATS; k++) {
-        if (k === i || !this.canAct(k)) continue;
-        const o = this.seats[k];
-        if (full) o.noRaise = false;
-        else if (o.acted) o.noRaise = true; // неполный олл-ин не открывает торги заново
-        o.acted = false;
-      }
       if (full) this.minRaise = raiseBy;
       this.currentBet = to;
     } else {
@@ -406,7 +401,7 @@ class Game {
       const canAct = this.seats.filter((s, i) => this.canAct(i)).length;
       if (alive > 1 && canAct < 2) this.runoutFrom = this.board.length;
     }
-    for (const s of this.seats) if (s) { s.bet = 0; s.acted = false; s.noRaise = false; }
+    for (const s of this.seats) if (s) { s.bet = 0; s.acted = false; }
     this.currentBet = 0;
     this.minRaise = this.cfg.bb;
     if (this.phase === 'river') return this._finish(true);

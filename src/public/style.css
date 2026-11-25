@@ -174,10 +174,20 @@ header .trail { grid-column: 3; display: flex; justify-content: flex-end; }
 header nav { display: flex; gap: 2px; padding: var(--s1); border-radius: var(--r2); box-shadow: inset 0 0 0 .5px var(--separator); }
 #info { color: var(--label-2); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #unread { position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: var(--pill); background: var(--red); color: #fff; font-size: 10px; font-weight: 600; line-height: 16px; }
+#saveWarning {
+  align-self: center;
+  margin: 0 var(--s4);
+  padding: var(--s1) var(--s3);
+  border-radius: var(--pill);
+  background: var(--bg-raised);
+  color: var(--orange);
+  text-align: center;
+}
 main { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; }
 
 /* ---------- 6. Стол ---------- */
-#table { position: relative; width: min(1120px, calc(var(--vw) - 72px - var(--left) - var(--side)), calc((var(--vh) - 252px) * 1.9)); aspect-ratio: 1.9; }
+#saveWarning:not([hidden]) ~ main { --save-notice-space: var(--s7); }
+#table { position: relative; width: min(1120px, calc(var(--vw) - 72px - var(--left) - var(--side)), calc((var(--vh) - 252px - var(--save-notice-space, 0px)) * 1.9)); aspect-ratio: 1.9; }
 #felt {
   position: absolute; inset: 13% 7%; border-radius: var(--pill);
   background: radial-gradient(ellipse at 50% 38%, var(--felt-a) 0%, var(--felt-b) 78%);
