@@ -1465,7 +1465,7 @@ function combosHtml() {
     const cards = c[1].split(' ').map((card, k) => (k < c[2] ? card : null));
     h += `<div class="line combo"><span class="num">${i + 1}</span><div class="grow"><div class="cn">${c[0]}</div></div><div class="cc">${cards.map((x) => cardHtml(x, 'xs')).join('')}</div></div>`;
   });
-  return h + '</div><span class="caption">Жеребьёвка первого батона</span><div class="group draw-rule">Батон получает игрок со старшей картой. При равном достоинстве — по масти, от старшей к младшей: ♠ пики, ♥ червы, ♦ бубны, ♣ трефы.</div>';
+  return h + '</div><span class="caption">Масти при жеребьёвке</span><div class="group draw-rule">♠ пики &gt; ♥ червы &gt; ♦ бубны &gt; ♣ трефы</div>';
 }
 // Олл-ин в «Комбинациях»: шансы каждого участника полосой и свои ауты стопкой (на столе их нет — там только игра).
 function allInHtml(stage) {
